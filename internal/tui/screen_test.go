@@ -89,10 +89,10 @@ func TestDrawBraille(t *testing.T) {
 	}
 }
 
-func TestDrawBrailleBar(t *testing.T) {
+func TestDrawBar(t *testing.T) {
 	pal := newPalette(termenv.Ascii)
 	s := NewScreen(10, 1, pal)
-	drawBrailleBar(s, 0, 0, 10, 0.5, pal.Mem, pal)
+	drawBar(s, 0, 0, 10, 0.5, pal.Mem, nil, pal)
 	// Half full: 5 full cells, 5 empty, still braille (not block) glyphs.
 	for i := 0; i < 5; i++ {
 		if c := s.cells[i]; c.R != 0x28FF {
@@ -106,7 +106,7 @@ func TestDrawBrailleBar(t *testing.T) {
 	}
 	// A single sub-cell of progress still shows a dot.
 	s2 := NewScreen(10, 1, pal)
-	drawBrailleBar(s2, 0, 0, 10, 0.01, pal.Mem, pal)
+	drawBar(s2, 0, 0, 10, 0.01, pal.Mem, nil, pal)
 	if c := s2.cells[0]; c.R == 0x2800 {
 		t.Fatal("tiny fraction should still draw a dot")
 	}
