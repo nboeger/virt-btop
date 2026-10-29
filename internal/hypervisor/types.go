@@ -106,6 +106,7 @@ type Domain struct {
 	MemLastUpdate     time.Time // zero when libvirt did not report it
 	MemLastUpdateZero bool      // libvirt reported last-update == 0 (never updated)
 	MemRSSKiB         uint64    // host-side qemu RSS; always accurate
+	MemCachedKiB      uint64    // guest page cache (balloon disk_caches)
 	SwapInKiB         uint64
 	SwapOutKiB        uint64
 	MajorFault        uint64
@@ -170,6 +171,18 @@ func (d *Domain) MemUsedKiB() uint64 {
 		return 0
 	}
 	return d.MemCurrentKiB - free
+}
+
+// MemAvailKiB is the memory the guest could still use without swapping:
+// balloon "usable", falling back to "unused". Zero without statistics.
+func (d *Domain) MemAvailKiB() uint64 {
+	switch {
+	case d.MemUsableSet:
+		return d.MemUsableKiB
+	case d.MemUnusedSet:
+		return d.MemUnusedKiB
+	}
+	return 0
 }
 
 func (d *Domain) DiskReadBytes() (v uint64) {

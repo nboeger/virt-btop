@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mattn/go-runewidth"
@@ -301,43 +302,77 @@ func (m *Model) renderMem(s *Screen, l Layout) {
 	if w <= 0 || h <= 0 {
 		return
 	}
-	frac := clamp(c.MemPct/100, 0, 1)
-	drawBar(s, x, y, w, frac, m.pal.Mem, nil, m.pal)
-
-	if h >= 2 {
-		if c.MemReporting > 0 {
-			var avail uint64
-			if c.MemTotalKiB > c.MemUsedKiB {
-				avail = c.MemTotalKiB - c.MemUsedKiB
-			}
-			putSpans(s, x, y+1, w, []span{
-				{"used ", Style{FG: m.pal.GraphText}},
-				{humanKiB(c.MemUsedKiB), Style{FG: m.pal.MainFG}},
-				{" · avail ", Style{FG: m.pal.GraphText}},
-				{humanKiB(avail), Style{FG: m.pal.Avail.At(0.55)}},
-			}, nil)
-		} else if c.ActiveVMs > 0 {
-			s.Put(x, y+1, w, truncate(fmt.Sprintf("guest stats missing/stale on %d VMs", c.MemExcluded), w), Style{FG: m.pal.GraphText})
+	if c.MemReporting == 0 {
+		if c.ActiveVMs > 0 && h >= 1 {
+			s.Put(x, y, w, truncate(fmt.Sprintf("guest stats missing/stale on %d VMs", c.MemExcluded), w), Style{FG: m.pal.GraphText})
 		}
+		return
 	}
-	if h >= 4 {
-		putSpans(s, x, y+2, w, []span{
+
+	// btop-style rows: Total, then Used / Available / Cached / Free, each with
+	// a value and a percent-of-total meter.
+	total := c.MemTotalKiB
+	row := 0
+	if h > row {
+		putSpans(s, x, y+row, w, []span{
+			{"Total:", Style{FG: m.pal.GraphText}},
+			{" " + humanKiB(total), Style{FG: m.pal.MainFG, Bold: true}},
+		}, nil)
+		row++
+	}
+	meters := []struct {
+		label string
+		kib   uint64
+		grad  Gradient
+	}{
+		{"Used:", c.MemUsedKiB, m.pal.Mem},
+		{"Available:", c.MemAvailKiB, m.pal.Avail},
+		{"Cached:", c.MemCachedKiB, m.pal.Download},
+		{"Free:", c.MemFreeKiB, m.pal.Free},
+	}
+	for _, mt := range meters {
+		if h <= row {
+			break
+		}
+		m.drawMemMeter(s, x, y+row, w, mt.label, mt.kib, total, mt.grad)
+		row++
+	}
+	if h > row+3 {
+		putSpans(s, x, y+row, w, []span{
 			{"rss ", Style{FG: m.pal.GraphText}},
 			{humanKiB(c.MemRSSKiB), Style{FG: m.pal.MainFG}},
 			{" · swap ", Style{FG: m.pal.GraphText}},
 			{fmt.Sprintf("%s/%s", humanKiB(c.SwapInKiB), humanKiB(c.SwapOutKiB)), Style{FG: m.pal.MainFG}},
 		}, nil)
+		row++
 	}
 
-	graphY := 2
-	if h >= 4 {
-		graphY = 3
-	}
-	graphH := h - graphY
+	graphH := h - row
 	if graphH > 0 {
 		vals := metrics.Window(m.hist.Mem, w*2)
-		DrawBraille(s, x, y+graphY, w, graphH, vals, 100,
+		DrawBraille(s, x, y+row, w, graphH, vals, 100,
 			func(f float64) termenv.Color { return m.pal.Mem.At(f) })
+	}
+}
+
+// drawMemMeter draws "Label:  value  ████░░░░  nn%" on one row.
+func (m *Model) drawMemMeter(s *Screen, x, y, w int, label string, kib, total uint64, grad Gradient) {
+	const labelW, valW, pctW = 11, 9, 4
+	frac := 0.0
+	if total > 0 {
+		frac = clamp(float64(kib)/float64(total), 0, 1)
+	}
+	putSpans(s, x, y, labelW, []span{{label, Style{FG: m.pal.GraphText}}}, nil)
+	val := humanKiB(kib)
+	if pad := valW - len(val); pad > 0 {
+		val = strings.Repeat(" ", pad) + val
+	}
+	putSpans(s, x+labelW, y, valW, []span{{val, Style{FG: m.pal.MainFG}}}, nil)
+	barX := x + labelW + valW + 1
+	barW := w - (labelW + valW + 1) - pctW - 1
+	if barW >= 3 {
+		drawBar(s, barX, y, barW, frac, grad, nil, m.pal)
+		putSpans(s, barX+barW+1, y, pctW, []span{{fmt.Sprintf("%3.0f%%", frac*100), Style{FG: m.pal.MainFG}}}, nil)
 	}
 }
 

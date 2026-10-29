@@ -281,6 +281,9 @@ func domainFromStats(name string, st *libvirt.DomainStats) *Domain {
 		d.MemUsableKiB, d.MemUsableSet = b.Usable, b.UsableSet
 		d.MemUnusedKiB, d.MemUnusedSet = b.Unused, b.UnusedSet
 		d.MemRSSKiB = b.Rss
+		if b.DiskCachesSet {
+			d.MemCachedKiB = b.DiskCaches
+		}
 		d.SwapInKiB = b.SwapIn
 		d.SwapOutKiB = b.SwapOut
 		d.MajorFault = b.MajorFault

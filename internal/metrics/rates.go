@@ -128,6 +128,9 @@ type Combined struct {
 	MemUsedKiB   uint64
 	MemTotalKiB  uint64 // configured memory of the reporting VMs
 	MemPct       float64
+	MemAvailKiB  uint64 // usable by guests without swapping (MemAvailable)
+	MemFreeKiB   uint64 // completely unused (MemFree)
+	MemCachedKiB uint64 // guest page cache
 	MemReporting int
 	MemExcluded  int
 	SwapInKiB    uint64
@@ -161,6 +164,11 @@ func Combine(domains []*hypervisor.Domain, rates map[string]Rates) Combined {
 			c.MemReporting++
 			c.MemUsedKiB += r.MemUsedKiB
 			c.MemTotalKiB += d.MemCurrentKiB
+			c.MemAvailKiB += d.MemAvailKiB()
+			if d.MemUnusedSet {
+				c.MemFreeKiB += d.MemUnusedKiB
+			}
+			c.MemCachedKiB += d.MemCachedKiB
 			c.SwapInKiB += d.SwapInKiB
 			c.SwapOutKiB += d.SwapOutKiB
 		} else {
