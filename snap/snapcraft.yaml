@@ -1,6 +1,6 @@
 name: virt-btop
 base: core22
-version: 1.0.2
+version: 1.1.0
 summary: A btop-style TUI for libvirt/KVM virtual machines
 title: virt-btop
 description: |
