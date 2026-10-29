@@ -10,6 +10,16 @@ import (
 // braille (U+2800-U+28FF), giving 2x4 sub-cell resolution. The area under the
 // sampled value is filled down to the baseline.
 func DrawBraille(s *Screen, x, y, w, h int, values []float64, maxVal float64, colorAt func(float64) termenv.Color) {
+	drawBraille(s, x, y, w, h, values, maxVal, colorAt, false)
+}
+
+// DrawBrailleDown is like DrawBraille but mirrored vertically: the baseline is
+// the top edge and the graph grows downward.
+func DrawBrailleDown(s *Screen, x, y, w, h int, values []float64, maxVal float64, colorAt func(float64) termenv.Color) {
+	drawBraille(s, x, y, w, h, values, maxVal, colorAt, true)
+}
+
+func drawBraille(s *Screen, x, y, w, h int, values []float64, maxVal float64, colorAt func(float64) termenv.Color, flip bool) {
 	if w <= 0 || h <= 0 || s == nil {
 		return
 	}
@@ -49,11 +59,18 @@ func DrawBraille(s *Screen, x, y, w, h int, values []float64, maxVal float64, co
 			yd = maxY
 		}
 
+		if flip {
+			yd = maxY - yd // distance from the top baseline
+		}
 		cx := i / 2
 		sx := i % 2
 		color := colorAt(frac)
 		// Fill from the sampled value down to the baseline.
-		for yy := yd; yy <= maxY; yy++ {
+		lo, hi := yd, maxY
+		if flip {
+			lo, hi = 0, yd
+		}
+		for yy := lo; yy <= hi; yy++ {
 			cy := yy / 4
 			sy := yy % 4
 			if cx < 0 || cx >= w || cy < 0 || cy >= h {

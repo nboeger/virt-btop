@@ -355,14 +355,12 @@ func (m *Model) renderNet(s *Screen, l Layout) {
 		totalsH = 1
 	}
 	graphArea := h - totalsH
-	rxH := graphArea / 2
-	if rxH < 1 {
-		rxH = 1
-	}
-	txH := graphArea - rxH
+	// One mirrored graph sharing a midline: upload grows up, download grows down.
+	txH := graphArea / 2
 	if txH < 1 {
 		txH = 1
 	}
+	rxH := graphArea - txH
 	graphW := w - 2
 	if graphW < 1 {
 		return
@@ -371,13 +369,13 @@ func (m *Model) renderNet(s *Screen, l Layout) {
 	txVals := metrics.Window(m.hist.NetTX, graphW*2)
 	maxVal := niceMax(maxOf(rxVals, txVals) * 1.05)
 
-	s.Put(x, y, 1, "↓", Style{FG: m.pal.Download.At(0.6)})
-	DrawBraille(s, x+2, y, graphW, rxH, rxVals, maxVal,
-		func(f float64) termenv.Color { return m.pal.Download.At(f) })
-	if txH > 0 {
-		s.Put(x, y+rxH, 1, "↑", Style{FG: m.pal.Upload.At(0.6)})
-		DrawBraille(s, x+2, y+rxH, graphW, txH, txVals, maxVal,
-			func(f float64) termenv.Color { return m.pal.Upload.At(f) })
+	s.Put(x, y, 1, "↑", Style{FG: m.pal.Upload.At(0.6)})
+	DrawBraille(s, x+2, y, graphW, txH, txVals, maxVal,
+		func(f float64) termenv.Color { return m.pal.Upload.At(f) })
+	if rxH > 0 {
+		s.Put(x, y+graphArea-1, 1, "↓", Style{FG: m.pal.Download.At(0.6)})
+		DrawBrailleDown(s, x+2, y+txH, graphW, rxH, rxVals, maxVal,
+			func(f float64) termenv.Color { return m.pal.Download.At(f) })
 	}
 	if totalsH > 0 {
 		putSpans(s, x, y+graphArea, w, []span{
