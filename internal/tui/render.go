@@ -210,6 +210,8 @@ func (m *Model) renderCPU(s *Screen, l Layout) {
 	s.Box(0, l.CPUY, l.W, l.CPUH, "cpu", subtitle, m.pal.BorderCPU, m.pal.BorderCPU, m.pal.BorderCPU)
 
 	active := m.runningByCPU()
+	// Match the VM list: without a STATE column the meters get wider.
+	cpuBarW := computeListColumns(0, m.filter == FilterAll).cpuBarW
 	cols := clampInt(l.CPUGridW/26, 1, 4)
 	const cellGap = 2
 	cellW := (l.CPUGridW - cellGap*(cols-1)) / cols
@@ -246,7 +248,7 @@ func (m *Model) renderCPU(s *Screen, l Layout) {
 			bg = m.pal.SelectedBG
 			s.Fill(x, y, cellW, 1, Style{BG: bg})
 		}
-		nameW := cellW - 10
+		nameW := cellW - (cpuBarW + 6)
 		if nameW < 4 {
 			nameW = 4
 		}
@@ -258,12 +260,12 @@ func (m *Model) renderCPU(s *Screen, l Layout) {
 
 		r := m.rates[d.Name]
 		frac := clamp(r.CPUPct/100, 0, 1)
-		drawBar(s, x+nameW+1, y, 4, frac, m.pal.Proc, bg, m.pal)
+		drawBar(s, x+nameW+1, y, cpuBarW, frac, m.pal.Proc, bg, m.pal)
 		pctStyle := Style{FG: m.pal.Proc.At(frac)}
 		if selected {
 			pctStyle = Style{FG: m.pal.SelectedFG, BG: bg}
 		}
-		s.Put(x+nameW+6, y, 4, fmt.Sprintf("%3.0f%%", r.CPUPct), pctStyle)
+		s.Put(x+nameW+cpuBarW+2, y, 4, fmt.Sprintf("%3.0f%%", r.CPUPct), pctStyle)
 	}
 	if more > 0 {
 		i := show
@@ -496,7 +498,10 @@ func drawBar(s *Screen, x, y, w int, frac float64, grad Gradient, bg termenv.Col
 
 func (m *Model) renderList(s *Screen, l Layout) {
 	g := l.listGeometry()
-	lc := computeListColumns(g.W)
+	// When the filter guarantees a single state (running by default), the
+	// STATE column is redundant; its width is better spent on the name.
+	showState := m.filter == FilterAll
+	lc := computeListColumns(g.W, showState)
 
 	total := 0
 	if m.snap != nil {
@@ -520,7 +525,9 @@ func (m *Model) renderList(s *Screen, l Layout) {
 		s.Put(x, g.HeaderY, w, truncate(label, w), st)
 	}
 	header(g.X+2, lc.nameW-2, "NAME", SortName)
-	header(g.X+lc.stateX, lc.stateW, "STATE", SortState)
+	if showState {
+		header(g.X+lc.stateX, lc.stateW, "STATE", SortState)
+	}
 	header(g.X+lc.cpuX, lc.cpuW, "CPU%", SortCPU)
 	s.Put(g.X+lc.vcpuX, g.HeaderY, lc.vcpuW, "vCPU", headerStyle)
 	header(g.X+lc.memX, lc.memW, "MEM", SortMem)
@@ -598,25 +605,27 @@ func (m *Model) drawListRow(s *Screen, g listGeometry, lc listColumns, d *hyperv
 	s.Put(g.X+2, y, lc.nameW-2, truncate(d.Name, lc.nameW-2), nameStyle)
 
 	// state
-	dot, stateColor := stateDot(d.State, m.pal)
-	s.Put(g.X+lc.stateX, y, 1, dot, Style{FG: stateColor, BG: bg})
-	stateStyle := Style{FG: m.pal.MainFG, BG: bg}
-	if selected {
-		stateStyle.FG = m.pal.SelectedFG
-	} else if dim {
-		stateStyle.FG = m.pal.InactiveFG
+	if lc.stateW > 0 {
+		dot, stateColor := stateDot(d.State, m.pal)
+		s.Put(g.X+lc.stateX, y, 1, dot, Style{FG: stateColor, BG: bg})
+		stateStyle := Style{FG: m.pal.MainFG, BG: bg}
+		if selected {
+			stateStyle.FG = m.pal.SelectedFG
+		} else if dim {
+			stateStyle.FG = m.pal.InactiveFG
+		}
+		s.Put(g.X+lc.stateX+2, y, lc.stateW-2, d.State.String(), stateStyle)
 	}
-	s.Put(g.X+lc.stateX+2, y, lc.stateW-2, d.State.String(), stateStyle)
 
 	// CPU
 	if d.State.Active() {
 		frac := clamp(r.CPUPct/100, 0, 1)
-		drawBar(s, g.X+lc.cpuX, y, 4, frac, m.pal.Proc, bg, m.pal)
+		drawBar(s, g.X+lc.cpuX, y, lc.cpuBarW, frac, m.pal.Proc, bg, m.pal)
 		pctStyle := Style{FG: m.pal.Proc.At(frac), BG: bg}
 		if selected {
 			pctStyle.FG = m.pal.SelectedFG
 		}
-		s.Put(g.X+lc.cpuX+5, y, 4, fmt.Sprintf("%3.0f%%", r.CPUPct), pctStyle)
+		s.Put(g.X+lc.cpuX+lc.cpuBarW+1, y, 4, fmt.Sprintf("%3.0f%%", r.CPUPct), pctStyle)
 	} else {
 		s.Put(g.X+lc.cpuX, y, lc.cpuW, "     —", Style{FG: m.pal.InactiveFG, BG: bg})
 	}
@@ -659,9 +668,9 @@ func (m *Model) drawListRow(s *Screen, g listGeometry, lc listColumns, d *hyperv
 			pctStyle.FG = m.pal.GraphText
 			usedStyle.FG = m.pal.GraphText
 		}
-		drawBar(s, g.X+lc.memX, y, 4, frac, grad, bg, m.pal)
-		s.Put(g.X+lc.memX+5, y, 4, fmt.Sprintf("%4s", pct(r.MemPct)), pctStyle)
-		s.Put(g.X+lc.memX+10, y, lc.memW-10, humanKiBShort(r.MemUsedKiB), usedStyle)
+		drawBar(s, g.X+lc.memX, y, lc.memBarW, frac, grad, bg, m.pal)
+		s.Put(g.X+lc.memX+lc.memBarW+1, y, 4, fmt.Sprintf("%4s", pct(r.MemPct)), pctStyle)
+		s.Put(g.X+lc.memX+lc.memBarW+6, y, lc.memW-lc.memBarW-6, humanKiBShort(r.MemUsedKiB), usedStyle)
 	}
 
 	// disk I/O

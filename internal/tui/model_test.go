@@ -246,7 +246,7 @@ func TestOverlayRect(t *testing.T) {
 
 func TestListColumnsFit(t *testing.T) {
 	for _, inner := range []int{84, 102, 120} {
-		lc := computeListColumns(inner)
+		lc := computeListColumns(inner, true)
 		last := lc.memX + lc.memW
 		if lc.showDisk {
 			last = lc.diskX + lc.diskW
@@ -260,5 +260,23 @@ func TestListColumnsFit(t *testing.T) {
 		if lc.nameW < 8 {
 			t.Fatalf("inner %d: name width %d", inner, lc.nameW)
 		}
+	}
+}
+
+func TestListColumnsHideState(t *testing.T) {
+	withState := computeListColumns(120, true)
+	without := computeListColumns(120, false)
+	if without.stateW != 0 {
+		t.Fatalf("state width = %d, want 0", without.stateW)
+	}
+	if without.cpuBarW <= withState.cpuBarW || without.memBarW <= withState.memBarW {
+		t.Fatalf("bars not widened: cpu %d->%d mem %d->%d",
+			withState.cpuBarW, without.cpuBarW, withState.memBarW, without.memBarW)
+	}
+	if without.nameW <= withState.nameW {
+		t.Fatalf("name not widened: %d -> %d", withState.nameW, without.nameW)
+	}
+	if last := without.netX + without.netW; last > without.innerW {
+		t.Fatalf("columns overflow to %d > %d", last, without.innerW)
 	}
 }

@@ -101,26 +101,43 @@ type listColumns struct {
 	innerW int
 
 	nameW, stateW, cpuW, vcpuW, memW, diskW, netW int
+	cpuBarW, memBarW                              int
 
 	nameX, stateX, cpuX, vcpuX, memX, diskX, netX int
 	showDisk, showNet                             bool
 }
 
-func computeListColumns(innerW int) listColumns {
+// computeListColumns lays out the VM list. showState is false when every
+// visible VM has the same state (the default running-only filter), in which
+// case the STATE column is dropped and its width goes to the name.
+func computeListColumns(innerW int, showState bool) listColumns {
 	lc := listColumns{
-		innerW: innerW,
-		stateW: 11,
-		cpuW:   9,
-		vcpuW:  5,
-		memW:   15,
-		diskW:  14,
-		netW:   13,
+		innerW:  innerW,
+		stateW:  11,
+		cpuW:    9,
+		vcpuW:   5,
+		memW:    15,
+		diskW:   14,
+		netW:    13,
+		cpuBarW: 4,
+		memBarW: 4,
+	}
+	if !showState {
+		// Spend most of the freed STATE width on wider (higher resolution)
+		// meters; the rest goes to the name.
+		lc.stateW = 0
+		lc.cpuBarW, lc.memBarW = 8, 8
+		lc.cpuW = lc.cpuBarW + 5
+		lc.memW = lc.memBarW + 11
 	}
 	baseFixed := lc.stateW + lc.cpuW + lc.vcpuW + lc.memW
 
 	fits := func(showDisk, showNet bool) int {
 		fixed := baseFixed
 		gaps := 4
+		if !showState {
+			gaps--
+		}
 		if showDisk {
 			fixed += lc.diskW
 			gaps++
@@ -148,8 +165,10 @@ func computeListColumns(innerW int) listColumns {
 	x := 0
 	lc.nameX = x
 	x += lc.nameW + colGap
-	lc.stateX = x
-	x += lc.stateW + colGap
+	if showState {
+		lc.stateX = x
+		x += lc.stateW + colGap
+	}
 	lc.cpuX = x
 	x += lc.cpuW + colGap
 	lc.vcpuX = x
