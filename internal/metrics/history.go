@@ -8,11 +8,13 @@ const MaxHistory = 900
 // History holds the combined series for the main boxes and a CPU series per VM
 // for the detail overlay.
 type History struct {
-	CPU   []float64
-	Mem   []float64
-	NetRX []float64
-	NetTX []float64
-	VMs   map[string][]float64
+	CPU    []float64
+	Mem    []float64
+	NetRX  []float64
+	NetTX  []float64
+	DiskRD []float64
+	DiskWR []float64
+	VMs    map[string][]float64
 }
 
 func NewHistory() *History {
@@ -24,6 +26,8 @@ func (h *History) Push(c Combined, domains []*hypervisor.Domain, rates map[strin
 	h.Mem = push(h.Mem, c.MemPct)
 	h.NetRX = push(h.NetRX, c.NetRXBps)
 	h.NetTX = push(h.NetTX, c.NetTXBps)
+	h.DiskRD = push(h.DiskRD, c.DiskRDBps)
+	h.DiskWR = push(h.DiskWR, c.DiskWRBps)
 
 	live := make(map[string]struct{}, len(domains))
 	for _, d := range domains {

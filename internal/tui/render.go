@@ -296,7 +296,7 @@ func (m *Model) renderMem(s *Screen, l Layout) {
 	case c.ActiveVMs > 0:
 		sub = "no guest stats"
 	}
-	s.Box(0, l.MemY, l.LeftW, l.MemH, "mem", sub, m.pal.BorderMem, m.pal.BorderMem, m.pal.BorderMem)
+	s.Box(0, l.MemY, l.LeftW, l.MemH, "mem/disk", sub, m.pal.BorderMem, m.pal.BorderMem, m.pal.BorderMem)
 
 	x, y, w, h := 2, l.MemY+1, l.LeftW-4, l.MemH-2
 	if w <= 0 || h <= 0 {
@@ -347,12 +347,53 @@ func (m *Model) renderMem(s *Screen, l Layout) {
 		row++
 	}
 
-	graphH := h - row
-	if graphH > 0 {
+	rem := h - row
+	memGraphH := rem
+	diskH := 0
+	if rem >= 6 {
+		memGraphH = rem / 3
+		if memGraphH < 2 {
+			memGraphH = 2
+		}
+		diskH = rem - memGraphH
+	}
+	if memGraphH > 0 {
 		vals := metrics.Window(m.hist.Mem, w*2)
-		DrawBraille(s, x, y+row, w, graphH, vals, 100,
+		DrawBraille(s, x, y+row, w, memGraphH, vals, 100,
 			func(f float64) termenv.Color { return m.pal.Mem.At(f) })
 	}
+	if diskH >= 3 {
+		m.renderDisk(s, x, y+row+memGraphH, w, diskH)
+	}
+}
+
+// renderDisk draws the combined disk I/O: a label row, then one mirrored graph
+// with reads growing up and writes growing down from a shared midline.
+func (m *Model) renderDisk(s *Screen, x, y, w, h int) {
+	c := m.combined
+	putSpans(s, x, y, w, []span{
+		{"disk ", Style{FG: m.pal.GraphText}},
+		{"R ", Style{FG: m.pal.GraphText}},
+		{humanRate(c.DiskRDBps), Style{FG: m.pal.Free.At(0.7)}},
+		{" · W ", Style{FG: m.pal.GraphText}},
+		{humanRate(c.DiskWRBps), Style{FG: m.pal.Avail.At(0.7)}},
+	}, nil)
+	gy, gh := y+1, h-1
+	graphW := w - 2
+	if gh < 2 || graphW < 1 {
+		return
+	}
+	rdVals := metrics.Window(m.hist.DiskRD, graphW*2)
+	wrVals := metrics.Window(m.hist.DiskWR, graphW*2)
+	maxVal := niceMax(maxOf(rdVals, wrVals) * 1.05)
+	rdH := gh / 2
+	wrH := gh - rdH
+	s.Put(x, gy, 1, "R", Style{FG: m.pal.Free.At(0.6)})
+	DrawBraille(s, x+2, gy, graphW, rdH, rdVals, maxVal,
+		func(f float64) termenv.Color { return m.pal.Free.At(f) })
+	s.Put(x, gy+gh-1, 1, "W", Style{FG: m.pal.Avail.At(0.6)})
+	DrawBrailleDown(s, x+2, gy+rdH, graphW, wrH, wrVals, maxVal,
+		func(f float64) termenv.Color { return m.pal.Avail.At(f) })
 }
 
 // drawMemMeter draws "Label:  value  ████░░░░  nn%" on one row.

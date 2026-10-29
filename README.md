@@ -6,7 +6,7 @@ parsing — and lays the data out like btop:
 
 - a full-width **CPU box** with the running VMs where btop lists cores, plus a
   combined braille graph of vCPU utilization;
-- a btop-style **memory box** (Total, Used, Available, Cached, Free meters) and a
+- a btop-style **mem/disk box** (Total, Used, Available, Cached, Free meters, plus a mirrored disk read/write graph) and a
   **network box** for the combined guest totals on the
   left;
 - a **VM list** where btop shows processes, with per-VM CPU, memory, disk I/O,
