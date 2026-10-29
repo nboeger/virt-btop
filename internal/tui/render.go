@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -396,7 +397,39 @@ func (m *Model) renderDisk(s *Screen, x, y, w, h int) {
 		func(f float64) termenv.Color { return m.pal.Avail.At(f) })
 }
 
-// drawMemMeter draws "Label:  value  ████░░░░  nn%" on one row.
+// drawBrailleBar draws a horizontal filled bar out of braille dots (full cells
+// plus a partial end cell), in the same dot style as the graphs.
+func drawBrailleBar(s *Screen, x, y, w int, frac float64, grad Gradient, pal *Palette) {
+	if w <= 0 {
+		return
+	}
+	frac = clamp(frac, 0, 1)
+	dots := int(math.Round(frac * float64(w*2)))
+	if dots == 0 && frac > 0 {
+		dots = 1
+	}
+	color := grad.At(frac)
+	// Left pair of dots is 0x47 (rows 1-3 left column + row 4 left), right pair
+	// is 0xB8; a single dot is the left column top three rows.
+	var leftHalf, rightHalf uint8 = 0x01 | 0x02 | 0x04 | 0x40, 0x08 | 0x10 | 0x20 | 0x80
+	for i := 0; i < w; i++ {
+		var mask uint8
+		switch {
+		case dots >= (i+1)*2:
+			mask = leftHalf | rightHalf
+		case dots == i*2+1:
+			mask = leftHalf
+		}
+		if mask == 0 {
+			s.Set(x+i, y, 0x2800, Style{FG: pal.MeterBG})
+			continue
+		}
+		s.Set(x+i, y, 0x2800+rune(mask), Style{FG: color})
+	}
+}
+
+// drawMemMeter draws "Label:  value  ⣿⣿⣿⣀⣀⣀  nn%" on one row: a braille
+// bar so it reads like the graphs rather than a solid block.
 func (m *Model) drawMemMeter(s *Screen, x, y, w int, label string, kib, total uint64, grad Gradient) {
 	const labelW, valW, pctW = 11, 9, 4
 	frac := 0.0
@@ -412,7 +445,7 @@ func (m *Model) drawMemMeter(s *Screen, x, y, w int, label string, kib, total ui
 	barX := x + labelW + valW + 1
 	barW := w - (labelW + valW + 1) - pctW - 1
 	if barW >= 3 {
-		drawBar(s, barX, y, barW, frac, grad, nil, m.pal)
+		drawBrailleBar(s, barX, y, barW, frac, grad, m.pal)
 		putSpans(s, barX+barW+1, y, pctW, []span{{fmt.Sprintf("%3.0f%%", frac*100), Style{FG: m.pal.MainFG}}}, nil)
 	}
 }

@@ -88,3 +88,26 @@ func TestDrawBraille(t *testing.T) {
 		t.Fatalf("100%% graph should fill all 40 cells, got %d", nonSpace)
 	}
 }
+
+func TestDrawBrailleBar(t *testing.T) {
+	pal := newPalette(termenv.Ascii)
+	s := NewScreen(10, 1, pal)
+	drawBrailleBar(s, 0, 0, 10, 0.5, pal.Mem, pal)
+	// Half full: 5 full cells, 5 empty, still braille (not block) glyphs.
+	for i := 0; i < 5; i++ {
+		if c := s.cells[i]; c.R != 0x28FF {
+			t.Fatalf("cell %d = %U, want full braille", i, c.R)
+		}
+	}
+	for i := 5; i < 10; i++ {
+		if c := s.cells[i]; c.R != 0x2800 {
+			t.Fatalf("cell %d = %U, want empty braille", i, c.R)
+		}
+	}
+	// A single sub-cell of progress still shows a dot.
+	s2 := NewScreen(10, 1, pal)
+	drawBrailleBar(s2, 0, 0, 10, 0.01, pal.Mem, pal)
+	if c := s2.cells[0]; c.R == 0x2800 {
+		t.Fatal("tiny fraction should still draw a dot")
+	}
+}
