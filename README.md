@@ -233,3 +233,7 @@ go run honnef.co/go/tools/cmd/staticcheck@latest -tags libvirt_dlopen ./...
   the next poll reconnects automatically; the footer shows errors until it does.
 - The qemu guest agent is required for guest-side interface names under
   `--read-write`.
+
+## License
+
+GPL-3.0. See [LICENSE](LICENSE).

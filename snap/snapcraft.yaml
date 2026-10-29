@@ -12,6 +12,7 @@ description: |
     sudo snap connect virt-btop:libvirt
 
 grade: stable
+license: GPL-3.0
 confinement: strict
 contact: https://github.com/nboeger/virt-btop/issues
 issues: https://github.com/nboeger/virt-btop/issues
