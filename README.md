@@ -26,6 +26,16 @@ its saved definition. To make it permanent, run
 
 ![virt-btop running](docs/screenshot.png)
 
+## Install
+
+- **Snap:** `sudo snap install virt-btop`, then `sudo snap connect virt-btop:libvirt`
+  (once the snap is available in the store).
+- **Release binaries / .deb / .rpm:** download from the
+  [GitHub releases](https://github.com/nboeger/virt-btop/releases) page.
+- **Homebrew:** `brew install nboeger/tap/virt-btop`
+- **Go:** `go install -tags libvirt_dlopen github.com/nboeger/virt-btop/cmd/virt-btop@latest`
+  (needs `gcc`; the `libvirt_dlopen` tag avoids needing libvirt headers).
+
 ## Requirements
 
 - Linux with libvirt and a QEMU/KVM driver.

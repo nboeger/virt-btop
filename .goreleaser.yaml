@@ -1,0 +1,79 @@
+version: 2
+
+project_name: virt-btop
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: virt-btop
+    main: ./cmd/virt-btop
+    binary: virt-btop
+    env:
+      - CGO_ENABLED=1
+    tags:
+      - libvirt_dlopen
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    overrides:
+      - goos: linux
+        goarch: amd64
+        env:
+          - CC=gcc
+      - goos: linux
+        goarch: arm64
+        env:
+          - CC=aarch64-linux-gnu-gcc
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    wrap_in_directory: false
+    files:
+      - LICENSE
+      - README.md
+
+nfpms:
+  - id: virt-btop
+    package_name: virt-btop
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    vendor: nboeger
+    homepage: https://github.com/nboeger/virt-btop
+    maintainer: Nathan Boeger <nboeger@gmail.com>
+    description: |-
+      A btop-style TUI for libvirt/KVM virtual machines. Reads libvirt
+      directly and shows per-VM CPU, memory, disk and network activity.
+    license: GPL-3.0
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    overrides:
+      deb:
+        dependencies:
+          - libvirt0
+      rpm:
+        dependencies:
+          - libvirt-libs
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - Merge pull request
+      - Merge branch
