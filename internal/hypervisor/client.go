@@ -51,7 +51,15 @@ type Client struct {
 
 	infoMu sync.Mutex
 	infos  map[string]cachedInfo
+
+	// periodTried records domains (name/ID) whose balloon stats period we
+	// already tried to enable, so a failure is not retried every poll.
+	periodTried map[string]bool
 }
+
+// balloonStatsPeriod is the guest memory stats period (seconds) enabled in
+// read-write mode for domains that do not report memory statistics.
+const balloonStatsPeriod = 5
 
 func openConn(uri string, readWrite bool) (*libvirt.Connect, error) {
 	if readWrite {
@@ -197,6 +205,7 @@ func (c *Client) collect() (*Snapshot, error) {
 		if d.VCPUs == 0 {
 			d.VCPUs = 1
 		}
+		c.ensureStatsPeriod(name, stats[i].Domain, d, now)
 		domains = append(domains, d)
 		seen[name] = true
 	}
@@ -211,6 +220,33 @@ func (c *Client) collect() (*Snapshot, error) {
 
 	sort.Slice(domains, func(i, j int) bool { return domains[i].Name < domains[j].Name })
 	return NewSnapshot(now, domains, warnings), nil
+}
+
+// ensureStatsPeriod turns on live balloon statistics for an active domain
+// whose guest memory stats are missing or stale because no stats period is set.
+// It needs a read-write connection and only changes the running domain (not
+// its persistent definition); the change is lost when the domain restarts, at
+// which point it is applied again. Failures are ignored: memory is then simply
+// shown as unavailable.
+func (c *Client) ensureStatsPeriod(name string, dom *libvirt.Domain, d *Domain, now time.Time) {
+	if !c.readWrite || !d.State.Active() || d.MemCurrentKiB == 0 {
+		return
+	}
+	if d.MemStatus(now) == MemFresh {
+		return
+	}
+	key := fmt.Sprintf("%s/%d", name, d.Info.ID)
+	c.infoMu.Lock()
+	if c.periodTried == nil {
+		c.periodTried = make(map[string]bool)
+	}
+	tried := c.periodTried[key]
+	c.periodTried[key] = true
+	c.infoMu.Unlock()
+	if tried {
+		return
+	}
+	_ = dom.SetMemoryStatsPeriod(balloonStatsPeriod, libvirt.DOMAIN_MEM_LIVE)
 }
 
 // infoFor returns cached metadata, re-reading it when it is old or the

@@ -16,7 +16,11 @@ parsing — and lays the data out like btop:
 - running VMs by default; press `f` to include paused, stopped, or all VMs.
 
 Read-only by default: on Debian/Ubuntu this needs **no sudo and no libvirt
-group**. An opt-in read-write connection enables guest-agent IP addresses.
+group**. An opt-in read-write connection (`--read-write`) enables guest-agent IP addresses and
+automatically enables live memory statistics (5s balloon period) on running VMs
+that report stale or no memory data. That change affects only the running VM, not
+its saved definition. To make it permanent, run
+`virsh dommemstat <vm> --period 5 --config`.
 
 ## Screenshot
 
