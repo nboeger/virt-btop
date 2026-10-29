@@ -1,0 +1,49 @@
+name: bump-homebrew-tap
+
+# On every tag, publish packaging/virt-btop.rb to nboeger/homebrew-tap with the
+# tag's source tarball URL and sha256.
+#
+# Setup: create a fine-grained PAT with contents:write on nboeger/homebrew-tap
+# and add it as the TAP_TOKEN repository secret. Without it this job skips.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check TAP_TOKEN is configured
+        id: check
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: echo "has_token=${{ secrets.TAP_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.has_token == 'true'
+
+      - name: Update formula in tap
+        if: steps.check.outputs.has_token == 'true'
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eux
+          URL="https://github.com/nboeger/virt-btop/archive/refs/tags/${TAG}.tar.gz"
+          SHA="$(curl -fsSL "${URL}" | sha256sum | awk '{print $1}')"
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/nboeger/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          sed -e "s|url \".*\"|url \"${URL}\"|" \
+              -e "s|sha256 \".*\"|sha256 \"${SHA}\"|" \
+              packaging/virt-btop.rb > tap/Formula/virt-btop.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/virt-btop.rb
+          git diff --cached --quiet || git commit -m "virt-btop ${TAG}"
+          git push origin HEAD
