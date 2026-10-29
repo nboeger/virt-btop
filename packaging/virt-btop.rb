@@ -5,7 +5,7 @@
 class VirtBtop < Formula
   desc "btop-style TUI for libvirt/KVM virtual machines"
   homepage "https://github.com/nboeger/virt-btop"
-  url "https://github.com/nboeger/virt-btop/archive/refs/tags/v1.1.0.tar.gz"
+  url "https://github.com/nboeger/virt-btop/archive/refs/tags/v1.2.0.tar.gz"
   sha256 "PLACEHOLDER"
   license "GPL-3.0-only"
 
