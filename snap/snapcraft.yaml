@@ -1,0 +1,61 @@
+name: virt-btop
+base: core22
+version: 1.0
+summary: A btop-style TUI for libvirt/KVM virtual machines
+title: virt-btop
+description: |
+  virt-btop is a btop-style terminal UI for libvirt/KVM virtual machines. It
+  talks to libvirt directly (no virsh) and shows per-VM CPU, memory, disk and
+  network activity with braille graphs, plus combined host/guest totals.
+
+  Connect the libvirt interface to let the snap reach the libvirt socket:
+    sudo snap connect virt-btop:libvirt
+
+grade: stable
+confinement: strict
+contact: https://github.com/nboeger/virt-btop/issues
+issues: https://github.com/nboeger/virt-btop/issues
+website: https://github.com/nboeger/virt-btop
+source-code: https://github.com/nboeger/virt-btop
+
+apps:
+  virt-btop:
+    command: bin/virt-btop
+    plugs:
+      - libvirt
+      - network
+
+parts:
+  virt-btop:
+    plugin: nil
+    source: .
+    build-packages:
+      - gcc
+      - curl
+    stage-packages:
+      - libvirt0
+    override-build: |
+      set -eux
+      VERSION=$(git describe --tags --always 2>/dev/null | sed 's/^v//' | tr -d '\n')
+      [ -n "$VERSION" ] || VERSION="0.0.0"
+      case "$(uname -m)" in
+        x86_64)  GOARCH=amd64 ;;
+        aarch64) GOARCH=arm64 ;;
+        *) echo "unsupported arch: $(uname -m)"; exit 1 ;;
+      esac
+      # core22 ships Go 1.22; the project needs >= 1.24
+      curl -fsSLo /tmp/go.tgz "https://go.dev/dl/go1.25.0.linux-$GOARCH.tar.gz"
+      rm -rf /tmp/gotoolchain
+      mkdir -p /tmp/gotoolchain
+      tar -C /tmp/gotoolchain --strip-components=1 -xzf /tmp/go.tgz
+      export PATH="/tmp/gotoolchain/bin:$PATH"
+      # libvirt_dlopen: no libvirt-dev needed; libvirt.so.0 is dlopen'd at
+      # runtime from the staged libvirt0 package.
+      CGO_ENABLED=1 go build -trimpath -tags libvirt_dlopen \
+        -ldflags "-s -w -X main.version=$VERSION" \
+        -o virt-btop ./cmd/virt-btop
+      mkdir -p "$CRAFT_PART_INSTALL/bin"
+      cp virt-btop "$CRAFT_PART_INSTALL/bin/"
+    stage:
+      - -usr/share/doc
+      - -usr/share/lintian

@@ -17,7 +17,8 @@ import (
 	"github.com/nboeger/virt-btop/internal/tui"
 )
 
-const version = "0.1.0"
+// version is overridden at build time with -ldflags "-X main.version=...".
+var version = "1.0"
 
 const (
 	minInterval = 250 * time.Millisecond
@@ -54,6 +55,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&sortName, "sort", "cpu", "initial sort: cpu, mem, name, disk, net, state")
 	fs.StringVar(&filterStr, "filter", "running", "initial filter: all, running, paused, stopped")
 	fs.BoolVar(&showVer, "version", false, "print version and exit")
+	fs.BoolVar(&showVer, "v", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
