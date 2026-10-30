@@ -20,8 +20,11 @@ Read-only by default: on Debian/Ubuntu this needs **no sudo and no libvirt
 group**. An opt-in read-write connection (`--read-write`) enables guest-agent IP addresses and
 automatically enables live memory statistics (5s balloon period) on running VMs
 that report stale or no memory data. That change affects only the running VM, not
-its saved definition. To make it permanent, run
-`virsh dommemstat <vm> --period 5 --config`.
+its saved definition. To make it permanent (and apply it now), run
+`virsh dommemstat <vm> --period 5 --live --config`. See
+[Guest memory statistics need a stats period](#guest-memory-statistics-need-a-stats-period)
+for enabling it on every VM at once. Disk and network stats come from the
+hypervisor and need **no** per-VM setting.
 
 ## Screenshot
 
@@ -166,8 +169,18 @@ resize message.
 
 ### Guest memory statistics need a stats period
 
-libvirt only refreshes guest memory statistics when the domain's memballoon has
-a stats period. Without one, libvirt keeps returning whatever the balloon driver
+**Memory is the only stat that needs a per-VM setting.** CPU, disk I/O, disk
+capacity, and network come straight from the hypervisor and always work. Guest
+memory, by contrast, is reported by the **virtio balloon driver inside the
+guest**, and libvirt only refreshes it when the domain's memballoon has a stats
+period configured. Two things must therefore be true for the mem box to show
+live numbers:
+
+1. the guest runs the **virtio balloon driver** (standard on Linux; absent on
+   some BSD/other guests, which then stay `unknown` no matter what);
+2. the domain's `<memballoon>` has a **stats period** set.
+
+Without a period, libvirt keeps returning whatever the balloon driver
 last pushed, possibly hours ago, with no error. virt-btop therefore checks
 `balloon.last-update` and never presents such numbers as live:
 
@@ -180,13 +193,32 @@ last pushed, possibly hours ago, with no error. virt-btop therefore checks
 The mem box and header say how many VMs are reporting (`3/9 VMs`), or
 `no guest stats` when none are. The detail overlay shows how old stale numbers
 are. To get live guest memory, enable the period on each VM (this changes the VM
-and needs read-write access, so virt-btop will never do it for you):
+and needs read-write access, so virt-btop will never do it for you). `--live`
+applies it to the running VM immediately, `--config` persists it across
+restarts; use both:
 
 ```sh
 virsh dommemstat <vm> --period 5 --live --config
 ```
 
 or add `<stats period='5'/>` inside the VM's `<memballoon>` element.
+
+To enable it on every VM at once (`--live` only applies to running domains, so
+stopped ones get `--config` alone):
+
+```sh
+for vm in $(virsh list --all --name | sed '/^$/d'); do
+  if [ "$(virsh domstate "$vm")" = running ]; then
+    virsh dommemstat "$vm" --period 5 --live --config
+  else
+    virsh dommemstat "$vm" --period 5 --config
+  fi
+done
+```
+
+Alternatively, running `virt-btop --read-write` enables the period live (5s) on
+running VMs that report stale or missing memory, without touching their saved
+definition.
 - **net** = host-side vnet RX/TX. Graphs auto-scale to the peak in the visible
   window; totals are cumulative since VM start.
 - **disk** = aggregate guest block-device read/write rates. The detail overlay
