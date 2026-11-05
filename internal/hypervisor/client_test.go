@@ -91,6 +91,29 @@ func TestDomainFromStatsLastUpdateZero(t *testing.T) {
 	}
 }
 
+func TestPruneDomainCaches(t *testing.T) {
+	c := &Client{
+		infos: map[string]cachedInfo{
+			"gone": {info: Info{ID: 1}},
+			"kept": {info: Info{ID: 2}},
+		},
+		periodTried: map[string]int{"gone": 1, "kept": 2},
+	}
+	c.pruneDomainCaches(map[string]bool{"kept": true})
+	if _, ok := c.infos["gone"]; ok {
+		t.Fatal("stale metadata cache entry was not pruned")
+	}
+	if _, ok := c.periodTried["gone"]; ok {
+		t.Fatal("stale stats-period entry was not pruned")
+	}
+	if _, ok := c.infos["kept"]; !ok {
+		t.Fatal("cache entry for a live domain was pruned")
+	}
+	if got := c.periodTried["kept"]; got != 2 {
+		t.Fatalf("periodTried[kept] = %d, want 2", got)
+	}
+}
+
 func TestIsPermissionDenied(t *testing.T) {
 	denied := []error{
 		libvirt.Error{Code: libvirt.ERR_AUTH_FAILED},

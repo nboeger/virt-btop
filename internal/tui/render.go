@@ -219,6 +219,9 @@ func (m *Model) renderCPU(s *Screen, l Layout) {
 		cellW = 12
 	}
 	rows := l.CPUInnerH
+	if rows < 1 {
+		rows = 1
+	}
 	capacity := cols * rows
 
 	show := len(active)
@@ -234,12 +237,10 @@ func (m *Model) renderCPU(s *Screen, l Layout) {
 	if len(active) == 0 {
 		s.Put(l.CPUInnerX, l.CPUInnerY, l.CPUGridW, "no running VMs", Style{FG: m.pal.GraphText})
 	}
+	// Fill each column top to bottom before starting the next one.
 	for i := 0; i < show; i++ {
 		d := active[i]
-		row, col := i/cols, i%cols
-		if row >= rows {
-			break
-		}
+		row, col := i%rows, i/rows
 		x := l.CPUInnerX + col*(cellW+cellGap)
 		y := l.CPUInnerY + row
 		selected := d.Name == m.selected
@@ -269,7 +270,7 @@ func (m *Model) renderCPU(s *Screen, l Layout) {
 	}
 	if more > 0 {
 		i := show
-		row, col := i/cols, i%cols
+		row, col := i%rows, i/rows
 		if row < rows {
 			x := l.CPUInnerX + col*(cellW+cellGap)
 			y := l.CPUInnerY + row

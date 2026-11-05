@@ -347,6 +347,7 @@ func (m *Model) ingest(snap *hypervisor.Snapshot, dt float64) {
 	}
 	m.domains = snap.Domains
 	m.snap = snap
+	m.pruneIfaceCache()
 	m.combined = metrics.Combine(snap.Domains, m.rates)
 	vcpus, util, host := metrics.CPUCombine(snap.Domains, m.rates, dt, m.host.Cores)
 	m.combined.VCPUs = vcpus
@@ -354,6 +355,20 @@ func (m *Model) ingest(snap *hypervisor.Snapshot, dt float64) {
 	m.combined.HostSharePct = host
 	m.hist.Push(m.combined, snap.Domains, m.rates)
 	m.ensureSelection()
+}
+
+// pruneIfaceCache drops cached address lookups for domains that no longer
+// exist. The cache is keyed by VM name, so without this a long-running instance
+// that sees many transient VMs would grow it without bound.
+func (m *Model) pruneIfaceCache() {
+	if len(m.ifaceCache) == 0 || m.snap == nil {
+		return
+	}
+	for name := range m.ifaceCache {
+		if _, ok := m.snap.ByName[name]; !ok {
+			delete(m.ifaceCache, name)
+		}
+	}
 }
 
 func (m *Model) ensureSelection() {

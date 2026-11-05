@@ -52,9 +52,12 @@ type Client struct {
 	infoMu sync.Mutex
 	infos  map[string]cachedInfo
 
-	// periodTried records domains (name/ID) whose balloon stats period we
-	// already tried to enable, so a failure is not retried every poll.
-	periodTried map[string]bool
+	// periodTried maps a domain name to the domain ID for which we already
+	// tried to enable the balloon stats period, so a failure is not retried
+	// every poll. The ID makes a restarted domain try again; entries are
+	// pruned when the domain disappears so restarts cannot grow the map
+	// forever.
+	periodTried map[string]int
 }
 
 // balloonStatsPeriod is the guest memory stats period (seconds) enabled in
@@ -210,16 +213,28 @@ func (c *Client) collect() (*Snapshot, error) {
 		seen[name] = true
 	}
 
+	c.pruneDomainCaches(seen)
+
+	sort.Slice(domains, func(i, j int) bool { return domains[i].Name < domains[j].Name })
+	return NewSnapshot(now, domains, warnings), nil
+}
+
+// pruneDomainCaches drops per-domain entries for domains that are no longer
+// present, keeping the metadata and stats-period caches bounded by the current
+// set of domains rather than every domain ever seen.
+func (c *Client) pruneDomainCaches(seen map[string]bool) {
 	c.infoMu.Lock()
+	defer c.infoMu.Unlock()
 	for name := range c.infos {
 		if !seen[name] {
 			delete(c.infos, name)
 		}
 	}
-	c.infoMu.Unlock()
-
-	sort.Slice(domains, func(i, j int) bool { return domains[i].Name < domains[j].Name })
-	return NewSnapshot(now, domains, warnings), nil
+	for name := range c.periodTried {
+		if !seen[name] {
+			delete(c.periodTried, name)
+		}
+	}
 }
 
 // ensureStatsPeriod turns on live balloon statistics for an active domain
@@ -235,15 +250,14 @@ func (c *Client) ensureStatsPeriod(name string, dom *libvirt.Domain, d *Domain, 
 	if d.MemStatus(now) == MemFresh {
 		return
 	}
-	key := fmt.Sprintf("%s/%d", name, d.Info.ID)
 	c.infoMu.Lock()
 	if c.periodTried == nil {
-		c.periodTried = make(map[string]bool)
+		c.periodTried = make(map[string]int)
 	}
-	tried := c.periodTried[key]
-	c.periodTried[key] = true
+	lastID, tried := c.periodTried[name]
+	c.periodTried[name] = d.Info.ID
 	c.infoMu.Unlock()
-	if tried {
+	if tried && lastID == d.Info.ID {
 		return
 	}
 	_ = dom.SetMemoryStatsPeriod(balloonStatsPeriod, libvirt.DOMAIN_MEM_LIVE)

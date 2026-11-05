@@ -68,6 +68,22 @@ func TestFailedInterfaceLookupIsNotRetriedEveryPoll(t *testing.T) {
 	}
 }
 
+func TestInterfaceCachePrunedWhenDomainsDisappear(t *testing.T) {
+	m := newTestModel(t)
+	m.ifaceCache["vm-cpu"] = ifaceEntry{at: time.Now()}
+	m.ifaceCache["vm-gone"] = ifaceEntry{at: time.Now()}
+
+	t0 := time.Unix(1700000015, 0)
+	m.handlePoll(pollMsg{snap: testSnapshot(t0, true)})
+
+	if _, ok := m.ifaceCache["vm-gone"]; ok {
+		t.Fatal("cache entry for a vanished VM was not pruned")
+	}
+	if _, ok := m.ifaceCache["vm-cpu"]; !ok {
+		t.Fatal("cache entry for a live VM was pruned")
+	}
+}
+
 func TestSuccessfulInterfaceLookupIsCached(t *testing.T) {
 	src := &countingSource{out: []hypervisor.IfaceInfo{{Name: "eth0", Addrs: []string{"10.0.0.2/24"}}}}
 	m := newTestModel(t)
@@ -123,6 +139,56 @@ func TestViewDoesNotMutateModel(t *testing.T) {
 		t.Fatal("View changed view settings")
 	}
 	assertViewFits(t, m) // and it still draws a full frame
+}
+
+// Regression: the CPU box used to fill row by row, so two running VMs appeared
+// side by side. It should fill a column top to bottom before wrapping.
+func TestCPUBoxListsVMsVertically(t *testing.T) {
+	m := newTestModel(t)
+	m.width, m.height = 130, 21
+	l := ComputeLayout(m.width, m.height)
+	s := NewScreen(m.width, m.height, m.pal)
+	m.renderCPU(s, l)
+
+	rowText := func(y int) string {
+		var b strings.Builder
+		for x := l.CPUInnerX; x < l.CPUInnerX+l.CPUGridW; x++ {
+			r := s.cells[s.idx(x, y)].R
+			if r == 0 {
+				r = ' '
+			}
+			b.WriteRune(r)
+		}
+		return b.String()
+	}
+
+	type position struct{ x, y int }
+	found := make(map[string]position)
+	for y := l.CPUInnerY; y < l.CPUInnerY+l.CPUInnerH; y++ {
+		line := rowText(y)
+		for _, name := range []string{"vm-cpu", "vm-mem"} {
+			if _, ok := found[name]; ok {
+				continue
+			}
+			if x := strings.Index(line, name); x >= 0 {
+				found[name] = position{x: x, y: y}
+			}
+		}
+	}
+	cpu, ok := found["vm-cpu"]
+	if !ok {
+		t.Fatal("vm-cpu not drawn in the CPU box")
+	}
+	mem, ok := found["vm-mem"]
+	if !ok {
+		t.Fatal("vm-mem not drawn in the CPU box")
+	}
+	if cpu.x != mem.x {
+		t.Fatalf("VMs are side by side: vm-cpu at x=%d, vm-mem at x=%d", cpu.x, mem.x)
+	}
+	if mem.y <= cpu.y {
+		t.Fatalf("vm-mem should be below vm-cpu: cpu y=%d, mem y=%d", cpu.y, mem.y)
+	}
 }
 
 func TestDetailClosesWhenItsVMDisappears(t *testing.T) {

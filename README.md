@@ -34,6 +34,9 @@ hypervisor and need **no** per-VM setting.
 
 - **Snap:** `sudo snap install virt-btop`, then `sudo snap connect virt-btop:libvirt`
   (once the snap is available in the store).
+
+To connect to libvirt you may have to run: `sudo snap connect virt-btop:libvirt`
+
 - **Release binaries / .deb / .rpm:** download from the
   [GitHub releases](https://github.com/nboeger/virt-btop/releases) page.
 - **Homebrew:** `brew install nboeger/tap/virt-btop`
