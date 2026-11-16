@@ -31,8 +31,9 @@ func (h *History) Push(c Combined, domains []*hypervisor.Domain, rates map[strin
 
 	live := make(map[string]struct{}, len(domains))
 	for _, d := range domains {
-		live[d.Name] = struct{}{}
-		h.VMs[d.Name] = push(h.VMs[d.Name], rates[d.Name].CPUPct)
+		key := d.Key()
+		live[key] = struct{}{}
+		h.VMs[key] = push(h.VMs[key], rates[key].CPUPct)
 	}
 	for name := range h.VMs {
 		if _, ok := live[name]; !ok {

@@ -104,7 +104,7 @@ func TestReconnectAfterConnectionLoss(t *testing.T) {
 	if _, err := c.Collect(); err == nil {
 		t.Fatal("second collect succeeded with no daemon")
 	}
-	if _, err := c.Interfaces("whatever"); err == nil {
+	if _, err := c.Interfaces("", "whatever"); err == nil {
 		t.Fatal("interfaces succeeded with no daemon")
 	}
 

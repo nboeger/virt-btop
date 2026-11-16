@@ -81,6 +81,9 @@ func Compute(prev *Counters, cur Counters, d *hypervisor.Domain, hostCores int) 
 	if dt <= 0 {
 		return r
 	}
+	if d.HostCores > 0 {
+		hostCores = d.HostCores
+	}
 	dCPU := delta(cur.CPUTimeNS, prev.CPUTimeNS)
 	r.CPUDeltaNS = dCPU
 	vcpus := d.VCPUs
@@ -159,7 +162,7 @@ func Combine(domains []*hypervisor.Domain, rates map[string]Rates) Combined {
 		c.NetRXTotal += d.NetRXBytes()
 		c.NetTXTotal += d.NetTXBytes()
 
-		r := rates[d.Name]
+		r := rates[d.Key()]
 		if r.MemStatus == hypervisor.MemFresh {
 			c.MemReporting++
 			c.MemUsedKiB += r.MemUsedKiB
@@ -194,16 +197,24 @@ func CPUCombine(domains []*hypervisor.Domain, rates map[string]Rates, dt float64
 		if d.State != hypervisor.StateRunning && d.State != hypervisor.StateBlocked {
 			continue
 		}
+		r := rates[d.Key()]
 		vcpus += d.VCPUs
-		cpuDeltaNS += rates[d.Name].CPUDeltaNS
+		cpuDeltaNS += r.CPUDeltaNS
+		if dt > 0 {
+			cores := d.HostCores
+			if cores <= 0 {
+				cores = hostCores
+			}
+			if cores > 0 {
+				// Sum each host's share, so a combined view reports the fraction
+				// of all monitored host cores instead of dividing every host by
+				// the local core count.
+				host += float64(r.CPUDeltaNS) / 1e9 / dt / float64(cores) * 100
+			}
+		}
 	}
-	if dt > 0 {
-		if vcpus > 0 {
-			util = float64(cpuDeltaNS) / 1e9 / dt / float64(vcpus) * 100
-		}
-		if hostCores > 0 {
-			host = float64(cpuDeltaNS) / 1e9 / dt / float64(hostCores) * 100
-		}
+	if dt > 0 && vcpus > 0 {
+		util = float64(cpuDeltaNS) / 1e9 / dt / float64(vcpus) * 100
 	}
 	return
 }

@@ -17,7 +17,7 @@ import (
 // interface so the view/model can be tested without a libvirt connection.
 type DataSource interface {
 	Collect() (*hypervisor.Snapshot, error)
-	Interfaces(name string) ([]hypervisor.IfaceInfo, error)
+	Interfaces(host, name string) ([]hypervisor.IfaceInfo, error)
 	InvalidateInfos()
 	URI() string
 	ReadWrite() bool
@@ -27,6 +27,12 @@ type Options struct {
 	Interval time.Duration
 	Sort     SortKey
 	Filter   Filter
+	// HostCount is the number of configured libvirt hosts. Values above one
+	// turn on host-qualified names and the "local host" header label.
+	HostCount int
+	// LocalHost says whether one of the endpoints is the local machine. It
+	// controls whether local-only load/uptime is shown in combined mode.
+	LocalHost bool
 }
 
 type SortKey int
@@ -145,7 +151,7 @@ const (
 )
 
 type ifacesMsg struct {
-	name   string
+	key    string
 	ifaces []hypervisor.IfaceInfo
 	err    error
 }
@@ -170,6 +176,8 @@ type Model struct {
 
 	uri       string
 	readWrite bool
+	hostCount int
+	localHost bool
 
 	sortKey SortKey
 	reverse bool
@@ -187,6 +195,7 @@ type Model struct {
 
 	showHelp   bool
 	showDetail bool
+	showHosts  bool
 
 	ifaceCache   map[string]ifaceEntry
 	ifacePending bool
@@ -208,10 +217,15 @@ func New(client DataSource, initial *hypervisor.Snapshot, opts Options) *Model {
 		sortKey:     opts.Sort,
 		filter:      opts.Filter,
 		interval:    opts.Interval,
+		hostCount:   opts.HostCount,
+		localHost:   opts.LocalHost,
 		ifaceCache:  make(map[string]ifaceEntry),
 	}
 	if m.interval <= 0 {
 		m.interval = time.Second
+	}
+	if m.hostCount <= 0 {
+		m.hostCount = 1
 	}
 	if client != nil {
 		m.uri = client.URI()
@@ -263,8 +277,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			entry.err = msg.err.Error()
 		}
-		m.ifaceCache[msg.name] = entry
-		if m.showDetail && m.selected != msg.name {
+		m.ifaceCache[msg.key] = entry
+		if m.showDetail && m.selected != msg.key {
 			return m, m.ensureIface(m.selected)
 		}
 		return m, nil
@@ -331,18 +345,19 @@ func (m *Model) ingest(snap *hypervisor.Snapshot, dt float64) {
 		return
 	}
 	for _, d := range snap.Domains {
+		key := d.Key()
 		cur := metrics.CountersOf(d, snap.At)
 		var prev *metrics.Counters
-		if old, ok := m.prev[d.Name]; ok {
+		if old, ok := m.prev[key]; ok {
 			prev = &old
 		}
-		m.rates[d.Name] = metrics.Compute(prev, cur, d, m.host.Cores)
-		m.prev[d.Name] = cur
+		m.rates[key] = metrics.Compute(prev, cur, d, m.host.Cores)
+		m.prev[key] = cur
 	}
-	for name := range m.prev {
-		if _, ok := snap.ByName[name]; !ok {
-			delete(m.prev, name)
-			delete(m.rates, name)
+	for key := range m.prev {
+		if _, ok := snap.ByKey[key]; !ok {
+			delete(m.prev, key)
+			delete(m.rates, key)
 		}
 	}
 	m.domains = snap.Domains
@@ -364,9 +379,9 @@ func (m *Model) pruneIfaceCache() {
 	if len(m.ifaceCache) == 0 || m.snap == nil {
 		return
 	}
-	for name := range m.ifaceCache {
-		if _, ok := m.snap.ByName[name]; !ok {
-			delete(m.ifaceCache, name)
+	for key := range m.ifaceCache {
+		if _, ok := m.snap.ByKey[key]; !ok {
+			delete(m.ifaceCache, key)
 		}
 	}
 }
@@ -387,11 +402,11 @@ func (m *Model) ensureSelection() {
 		return
 	}
 	for _, d := range vis {
-		if d.Name == m.selected {
+		if d.Key() == m.selected {
 			return
 		}
 	}
-	m.selected = vis[0].Name
+	m.selected = vis[0].Key()
 }
 
 func stateOrder(s hypervisor.State) int {
@@ -422,7 +437,7 @@ func (m *Model) visibleDomains() []*hypervisor.Domain {
 		if !m.filter.Match(d) {
 			continue
 		}
-		if q != "" && !strings.Contains(strings.ToLower(d.Name), q) {
+		if q != "" && !strings.Contains(strings.ToLower(d.DisplayName()), q) {
 			continue
 		}
 		out = append(out, d)
@@ -440,7 +455,7 @@ func SortDomains(domains []*hypervisor.Domain, rates map[string]metrics.Rates, k
 
 	sort.SliceStable(domains, func(i, j int) bool {
 		a, b := domains[i], domains[j]
-		ra, rb := rates[a.Name], rates[b.Name]
+		ra, rb := rates[a.Key()], rates[b.Key()]
 		cmp := 0
 		switch key {
 		case SortCPU:
@@ -452,7 +467,7 @@ func SortDomains(domains []*hypervisor.Domain, rates map[string]metrics.Rates, k
 		case SortNet:
 			cmp = cmpFloat(ra.NetRXBps+ra.NetTXBps, rb.NetRXBps+rb.NetTXBps)
 		case SortName:
-			cmp = strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+			cmp = strings.Compare(strings.ToLower(a.DisplayName()), strings.ToLower(b.DisplayName()))
 		case SortState:
 			cmp = cmpInt(stateOrder(a.State), stateOrder(b.State))
 		}
@@ -468,7 +483,7 @@ func SortDomains(domains []*hypervisor.Domain, rates map[string]metrics.Rates, k
 			if sa, sb := stateOrder(a.State), stateOrder(b.State); sa != sb {
 				return sa < sb
 			}
-			return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)) < 0
+			return strings.Compare(strings.ToLower(a.DisplayName()), strings.ToLower(b.DisplayName())) < 0
 		}
 		if desc {
 			return cmp > 0
@@ -499,9 +514,9 @@ func cmpInt(a, b int) int {
 	}
 }
 
-func indexOfDomain(list []*hypervisor.Domain, name string) int {
+func indexOfDomain(list []*hypervisor.Domain, key string) int {
 	for i, d := range list {
-		if d.Name == name {
+		if d.Key() == key {
 			return i
 		}
 	}
@@ -549,7 +564,7 @@ func (m *Model) moveSelection(delta int) tea.Cmd {
 	} else {
 		idx = clampInt(idx+delta, 0, len(vis)-1)
 	}
-	m.selected = vis[idx].Name
+	m.selected = vis[idx].Key()
 	if m.showDetail {
 		return m.ensureIface(m.selected)
 	}
@@ -566,6 +581,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 	if key == "q" {
 		return tea.Quit
+	}
+	if m.showHosts {
+		m.showHosts = false
+		return nil
 	}
 	if m.showHelp {
 		m.showHelp = false
@@ -590,6 +609,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return m.moveSelection(1 << 20)
 		case "?":
 			m.showDetail = false
+			m.showHosts = false
 			m.showHelp = true
 			return nil
 		}
@@ -598,7 +618,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	switch key {
 	case "?":
+		m.showHosts = false
 		m.showHelp = true
+	case "H":
+		m.showHosts = true
+		m.showDetail = false
+		m.showHelp = false
 	case "up", "k":
 		return m.moveSelection(-1)
 	case "down", "j":
@@ -686,7 +711,8 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
-	if m.showHelp {
+	if m.showHosts || m.showHelp {
+		m.showHosts = false
 		m.showHelp = false
 		return nil
 	}
@@ -723,7 +749,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		if idx < 0 || idx >= len(vis) {
 			return nil
 		}
-		m.selected = vis[idx].Name
+		m.selected = vis[idx].Key()
 	}
 	return nil
 }
@@ -795,30 +821,33 @@ func (m *Model) openDetail() tea.Cmd {
 	}
 	m.showDetail = true
 	m.showHelp = false
+	m.showHosts = false
 	return m.ensureIface(m.selected)
 }
 
-func (m *Model) ensureIface(name string) tea.Cmd {
-	if name == "" || m.client == nil || !m.showDetail {
+func (m *Model) ensureIface(key string) tea.Cmd {
+	if key == "" || m.client == nil || !m.showDetail {
 		return nil
 	}
 	// libvirt rejects address lookups for inactive domains, so don't ask.
 	if m.snap == nil {
 		return nil
 	}
-	if d := m.snap.ByName[name]; d == nil || !d.State.Active() {
+	d := m.snap.ByKey[key]
+	if d == nil || !d.State.Active() {
 		return nil
 	}
-	if e, ok := m.ifaceCache[name]; ok && time.Since(e.at) < ifaceRefresh {
+	if e, ok := m.ifaceCache[key]; ok && time.Since(e.at) < ifaceRefresh {
 		return nil
 	}
 	if m.ifacePending {
 		return nil
 	}
 	m.ifacePending = true
+	host, name := hypervisor.SplitKey(key)
 	return func() tea.Msg {
-		ifaces, err := m.client.Interfaces(name)
-		return ifacesMsg{name: name, ifaces: ifaces, err: err}
+		ifaces, err := m.client.Interfaces(host, name)
+		return ifacesMsg{key: key, ifaces: ifaces, err: err}
 	}
 }
 
@@ -836,7 +865,7 @@ func (m *Model) selectedDomain() *hypervisor.Domain {
 	if m.snap == nil || m.selected == "" {
 		return nil
 	}
-	return m.snap.ByName[m.selected]
+	return m.snap.ByKey[m.selected]
 }
 
 func (m *Model) selectedRate() metrics.Rates {

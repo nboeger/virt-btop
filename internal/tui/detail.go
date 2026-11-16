@@ -21,7 +21,7 @@ func (m *Model) renderDetail(s *Screen, l Layout) {
 
 	x, y, width, height := overlayRect(l, 112, 28)
 	sub := "esc/enter close"
-	s.Box(x, y, width, height, "vm — "+d.Name, sub, m.pal.DivLine, m.pal.Title, m.pal.GraphText)
+	s.Box(x, y, width, height, "vm — "+d.DisplayName(), sub, m.pal.DivLine, m.pal.Title, m.pal.GraphText)
 
 	cx, cy := x+2, y+1
 	cw, ch := width-4, height-2
@@ -117,7 +117,7 @@ func (m *Model) renderDetail(s *Screen, l Layout) {
 	if ch < 10 {
 		graphH = 1
 	}
-	vals := metrics.Window(m.hist.VMs[d.Name], leftW*2)
+	vals := metrics.Window(m.hist.VMs[d.Key()], leftW*2)
 	DrawBraille(s, cx, ly, leftW, graphH, vals, 100,
 		func(f float64) termenv.Color { return m.pal.CPU.At(f) })
 	ly += graphH
@@ -308,7 +308,7 @@ func (m *Model) renderDetail(s *Screen, l Layout) {
 		ry++
 	}
 
-	entry, cached := m.ifaceCache[d.Name]
+	entry, cached := m.ifaceCache[d.Key()]
 	switch {
 	case !d.State.Active():
 		if ry < cy+ch {

@@ -15,11 +15,11 @@ type fakeSource struct {
 	ifaces []hypervisor.IfaceInfo
 }
 
-func (f *fakeSource) Collect() (*hypervisor.Snapshot, error)            { return nil, nil }
-func (f *fakeSource) Interfaces(string) ([]hypervisor.IfaceInfo, error) { return f.ifaces, nil }
-func (f *fakeSource) InvalidateInfos()                                  {}
-func (f *fakeSource) URI() string                                       { return "qemu:///test" }
-func (f *fakeSource) ReadWrite() bool                                   { return false }
+func (f *fakeSource) Collect() (*hypervisor.Snapshot, error)                    { return nil, nil }
+func (f *fakeSource) Interfaces(string, string) ([]hypervisor.IfaceInfo, error) { return f.ifaces, nil }
+func (f *fakeSource) InvalidateInfos()                                          {}
+func (f *fakeSource) URI() string                                               { return "qemu:///test" }
+func (f *fakeSource) ReadWrite() bool                                           { return false }
 
 func testDomain(name string, state hypervisor.State, vcpus int, cpuNS, memCur, memUsable uint64) *hypervisor.Domain {
 	times := make([]uint64, vcpus)
@@ -278,5 +278,51 @@ func TestListColumnsHideState(t *testing.T) {
 	}
 	if last := without.netX + without.netW; last > without.innerW {
 		t.Fatalf("columns overflow to %d > %d", last, without.innerW)
+	}
+}
+
+func TestMultiHostDomainsStayDistinct(t *testing.T) {
+	t0 := time.Unix(1700000000, 0)
+	mk := func(at time.Time, cpu uint64) *hypervisor.Snapshot {
+		mkDomain := func(host string, cpu uint64) *hypervisor.Domain {
+			d := testDomain("web", hypervisor.StateRunning, 2, cpu, 4<<20, 3<<20)
+			d.Host = host
+			d.MemLastUpdate = at.Add(-time.Second)
+			return d
+		}
+		return hypervisor.NewSnapshot(at, []*hypervisor.Domain{
+			mkDomain("local", cpu),
+			mkDomain("alpha", cpu*2),
+		}, nil)
+	}
+
+	m := New(&fakeSource{}, mk(t0, 1_000_000_000), Options{
+		Interval: time.Second, Sort: SortCPU, Filter: FilterAll, HostCount: 2,
+	})
+	m.pal = newPalette(termenv.Ascii)
+	m.ingest(mk(t0.Add(time.Second), 2_000_000_000), 1.0)
+	m.lastAt = t0.Add(time.Second)
+	m.width, m.height = 170, 40
+
+	if len(m.rates) != 2 {
+		t.Fatalf("rates = %d, want one entry per host-qualified VM", len(m.rates))
+	}
+	if m.rates["local\x00web"].CPUPct == m.rates["alpha\x00web"].CPUPct {
+		t.Fatal("domains from different hosts share a rate entry")
+	}
+	if m.selected == "" || m.snap.ByKey[m.selected] == nil {
+		t.Fatalf("selected key %q is not in ByKey", m.selected)
+	}
+
+	m.search = "alpha"
+	vis := m.visibleDomains()
+	if len(vis) != 1 || vis[0].Host != "alpha" {
+		t.Fatalf("search by host returned %+v", vis)
+	}
+
+	m.search = ""
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "local/web") || !strings.Contains(view, "alpha/web") {
+		t.Fatalf("combined view does not show host-qualified names")
 	}
 }

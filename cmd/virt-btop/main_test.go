@@ -11,6 +11,7 @@ import (
 
 	"github.com/nboeger/virt-btop/internal/hypervisor"
 	"github.com/nboeger/virt-btop/internal/metrics"
+	"github.com/nboeger/virt-btop/internal/tui"
 )
 
 func runArgs(args ...string) (code int, stdout, stderr string) {
@@ -109,5 +110,55 @@ func TestMemCell(t *testing.T) {
 	d, r = mk(func(d *hypervisor.Domain) { d.MemUsableSet = false })
 	if got := memCell(d, r); got != "n/a/1.00G" {
 		t.Errorf("unknown = %q (must not claim usage)", got)
+	}
+}
+
+type fakeCollector struct {
+	snaps []*hypervisor.Snapshot
+	i     int
+}
+
+func (f *fakeCollector) Collect() (*hypervisor.Snapshot, error) {
+	s := f.snaps[f.i]
+	if f.i < len(f.snaps)-1 {
+		f.i++
+	}
+	return s, nil
+}
+
+func TestPrintOnceShowsHostColumnForCombinedHosts(t *testing.T) {
+	at := time.Unix(1700000000, 0)
+	domains := []*hypervisor.Domain{
+		{Host: "local", Name: "web", State: hypervisor.StateShutoff},
+		{Host: "alpha", Name: "web", State: hypervisor.StateShutoff},
+	}
+	snap := hypervisor.NewSnapshot(at, domains, nil)
+	c := &fakeCollector{snaps: []*hypervisor.Snapshot{snap, hypervisor.NewSnapshot(at.Add(time.Millisecond), domains, nil)}}
+
+	var out, errOut bytes.Buffer
+	if err := printOnce(&out, &errOut, c, snap, time.Millisecond, tui.SortName, tui.FilterAll, 2); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{"HOST", "local", "alpha", "2 hosts"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("output missing %q:\n%s", want, text)
+		}
+	}
+	rows := 0
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "web") && (strings.Contains(line, "local") || strings.Contains(line, "alpha")) {
+			rows++
+		}
+	}
+	if rows != 2 {
+		t.Errorf("same-named VM rows = %d, want 2:\n%s", rows, text)
+	}
+}
+
+func TestEmptyAddIsRejectedBeforeConnecting(t *testing.T) {
+	code, _, errOut := runArgs("--add", "  ", "--once")
+	if code != 2 || !strings.Contains(errOut, "--add") {
+		t.Fatalf("code=%d stderr=%q", code, errOut)
 	}
 }

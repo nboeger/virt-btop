@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 )
 
 // version is overridden at build time with -ldflags "-X main.version=...".
-var version = "1.3.0"
+var version = "1.4.0"
 
 const (
 	minInterval = 250 * time.Millisecond
@@ -32,10 +33,20 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+// stringList implements flag.Value for repeatable string options.
+type stringList []string
+
+func (s *stringList) String() string { return strings.Join(*s, ",") }
+func (s *stringList) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
+
 // run is main without os.Exit so that deferred cleanup always executes.
 func run(args []string, stdout, stderr io.Writer) int {
 	var (
 		uri       string
+		addURIs   stringList
 		interval  time.Duration
 		readWrite bool
 		once      bool
@@ -48,6 +59,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.StringVar(&uri, "c", "", "libvirt connection URI (default: $LIBVIRT_DEFAULT_URI or qemu:///system)")
 	fs.StringVar(&uri, "connect", "", "libvirt connection URI (default: $LIBVIRT_DEFAULT_URI or qemu:///system)")
+	fs.Var(&addURIs, "add", "additional libvirt URI to combine with -c/local (repeatable)")
 	fs.DurationVar(&interval, "i", time.Second, "poll interval, 250ms to 10s")
 	fs.DurationVar(&interval, "interval", time.Second, "poll interval, 250ms to 10s")
 	fs.BoolVar(&readWrite, "read-write", false, "use a read-write connection (needed for guest-agent IPs; libvirt group required)")
@@ -81,13 +93,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "virt-btop: invalid --filter %q (want all, running, paused, stopped)\n", filterStr)
 		return 2
 	}
+	endpoints, err := hypervisor.BuildEndpoints(uri, addURIs)
+	if err != nil {
+		fmt.Fprintf(stderr, "virt-btop: %v\n", err)
+		return 2
+	}
 
-	client, err := hypervisor.Connect(uri, readWrite)
+	client, err := hypervisor.ConnectCluster(endpoints, readWrite)
 	if err != nil {
 		fmt.Fprintf(stderr, "virt-btop: %v%s\n", err, connectHint(err, readWrite))
 		return 1
 	}
 	defer closeClient(client, stderr)
+	for _, w := range client.Warnings() {
+		fmt.Fprintf(stderr, "virt-btop: warning: %s\n", w)
+	}
 
 	initial, err := client.Collect()
 	if err != nil {
@@ -96,17 +116,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if once {
-		if err := printOnce(stdout, stderr, client, initial, interval, sortKey, filter); err != nil {
+		if err := printOnce(stdout, stderr, client, initial, interval, sortKey, filter, len(endpoints)); err != nil {
 			fmt.Fprintf(stderr, "virt-btop: %v\n", err)
 			return 1
 		}
 		return 0
 	}
 
+	hasLocal := false
+	for _, ep := range endpoints {
+		if ep.Local {
+			hasLocal = true
+			break
+		}
+	}
 	model := tui.New(client, initial, tui.Options{
-		Interval: interval,
-		Sort:     sortKey,
-		Filter:   filter,
+		Interval:  interval,
+		Sort:      sortKey,
+		Filter:    filter,
+		HostCount: len(endpoints),
+		LocalHost: hasLocal,
 	})
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
@@ -116,9 +145,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// closeClient closes the libvirt connection but gives up after closeTimeout so
+// closeClient closes the libvirt connections but gives up after closeTimeout so
 // a hung libvirtd cannot keep the process alive; the OS reclaims the socket.
-func closeClient(client *hypervisor.Client, stderr io.Writer) {
+func closeClient(client io.Closer, stderr io.Writer) {
 	done := make(chan error, 1)
 	go func() { done <- client.Close() }()
 	select {
@@ -131,10 +160,16 @@ func closeClient(client *hypervisor.Client, stderr io.Writer) {
 	}
 }
 
-func printOnce(stdout, stderr io.Writer, client *hypervisor.Client, initial *hypervisor.Snapshot, interval time.Duration, sortKey tui.SortKey, filter tui.Filter) error {
+// collector is the part of hypervisor.Cluster needed by --once.
+type collector interface {
+	Collect() (*hypervisor.Snapshot, error)
+}
+
+func printOnce(stdout, stderr io.Writer, client collector, initial *hypervisor.Snapshot, interval time.Duration, sortKey tui.SortKey, filter tui.Filter, hostCount int) error {
+	multiHost := hostCount > 1
 	prev := make(map[string]metrics.Counters, len(initial.Domains))
 	for _, d := range initial.Domains {
-		prev[d.Name] = metrics.CountersOf(d, initial.At)
+		prev[d.Key()] = metrics.CountersOf(d, initial.At)
 	}
 
 	time.Sleep(interval)
@@ -149,11 +184,12 @@ func printOnce(stdout, stderr io.Writer, client *hypervisor.Client, initial *hyp
 	dt := snap.At.Sub(initial.At).Seconds()
 	rates := make(map[string]metrics.Rates, len(snap.Domains))
 	for _, d := range snap.Domains {
+		key := d.Key()
 		var p *metrics.Counters
-		if c, ok := prev[d.Name]; ok {
+		if c, ok := prev[key]; ok {
 			p = &c
 		}
-		rates[d.Name] = metrics.Compute(p, metrics.CountersOf(d, snap.At), d, runtime.NumCPU())
+		rates[key] = metrics.Compute(p, metrics.CountersOf(d, snap.At), d, runtime.NumCPU())
 	}
 
 	filtered := make([]*hypervisor.Domain, 0, len(snap.Domains))
@@ -168,9 +204,12 @@ func printOnce(stdout, stderr io.Writer, client *hypervisor.Client, initial *hyp
 	// to check is the final write.
 	var buf bytes.Buffer
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
+	if multiHost {
+		fmt.Fprintf(w, "HOST\t")
+	}
 	fmt.Fprintf(w, "NAME\tSTATE\tvCPU\tCPU%%\tMEM\tDISK R/W\tNET RX/TX\n")
 	for _, d := range filtered {
-		r := rates[d.Name]
+		r := rates[d.Key()]
 		mem, disk, net, cpu := "—", "—", "—", "—"
 		switch {
 		case !d.State.Active():
@@ -183,9 +222,16 @@ func printOnce(stdout, stderr io.Writer, client *hypervisor.Client, initial *hyp
 			net = fmt.Sprintf("↓%s ↑%s", tui.FormatRateShort(r.NetRXBps), tui.FormatRateShort(r.NetTXBps))
 			cpu = tui.FormatPct(r.CPUPct)
 		}
+		if multiHost {
+			fmt.Fprintf(w, "%s\t", d.Host)
+		}
 		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\n", d.Name, d.State, d.VCPUs, cpu, mem, disk, net)
 	}
-	fmt.Fprintf(w, "\n%d/%d domains · %.0fms capture\n", len(filtered), len(snap.Domains), dt*1000)
+	if multiHost {
+		fmt.Fprintf(w, "\n%d/%d domains · %d hosts · %.0fms capture\n", len(filtered), len(snap.Domains), hostCount, dt*1000)
+	} else {
+		fmt.Fprintf(w, "\n%d/%d domains · %.0fms capture\n", len(filtered), len(snap.Domains), dt*1000)
+	}
 	if err := w.Flush(); err != nil {
 		return err
 	}

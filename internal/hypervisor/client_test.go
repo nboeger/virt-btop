@@ -155,3 +155,72 @@ func TestAppendUniqueAndFilters(t *testing.T) {
 		t.Fatal("isNoisyAddr wrong")
 	}
 }
+
+func TestNodeCPUTimesAndPercent(t *testing.T) {
+	first := &libvirt.NodeCPUStats{
+		KernelSet: true, Kernel: 10,
+		UserSet: true, User: 10,
+		IdleSet: true, Idle: 80,
+	}
+	total, idle, ok := nodeCPUTimes(first)
+	if !ok || total != 100 || idle != 80 {
+		t.Fatalf("nodeCPUTimes = %d/%d/%v", total, idle, ok)
+	}
+
+	c := &Client{}
+	if _, ok := c.nodeCPUPercent(first); ok {
+		t.Fatal("first sample cannot produce a rate")
+	}
+	second := &libvirt.NodeCPUStats{
+		KernelSet: true, Kernel: 20,
+		UserSet: true, User: 20,
+		IdleSet: true, Idle: 90,
+	}
+	pct, ok := c.nodeCPUPercent(second)
+	if !ok {
+		t.Fatal("second sample should produce a rate")
+	}
+	approxPct(t, pct, 66.666666, "node cpu pct")
+
+	// Guest time is already included in user time.
+	withGuest := &libvirt.NodeCPUStats{
+		KernelSet: true, Kernel: 1,
+		UserSet: true, User: 1,
+		IdleSet: true, Idle: 1,
+		GuestSet: true, Guest: 100,
+	}
+	if total, _, _ := nodeCPUTimes(withGuest); total != 3 {
+		t.Fatalf("guest counted twice: total = %d, want 3", total)
+	}
+}
+
+func TestNodeMemoryUsed(t *testing.T) {
+	total, used, ok := nodeMemoryUsed(&libvirt.NodeMemoryStats{
+		TotalSet: true, Total: 1000,
+		AvailableSet: true, Available: 400,
+	})
+	if !ok || total != 1000 || used != 600 {
+		t.Fatalf("available memory = %d/%d/%v", total, used, ok)
+	}
+
+	total, used, ok = nodeMemoryUsed(&libvirt.NodeMemoryStats{
+		TotalSet: true, Total: 1000,
+		FreeSet: true, Free: 100,
+		BuffersSet: true, Buffers: 50,
+		CachedSet: true, Cached: 250,
+	})
+	if !ok || total != 1000 || used != 600 {
+		t.Fatalf("free+buffers+cached = %d/%d/%v", total, used, ok)
+	}
+
+	if _, _, ok := nodeMemoryUsed(&libvirt.NodeMemoryStats{TotalSet: true}); ok {
+		t.Fatal("memory without free/available data must be invalid")
+	}
+}
+
+func approxPct(t *testing.T, got, want float64, label string) {
+	t.Helper()
+	if d := got - want; d < -1e-5 || d > 1e-5 {
+		t.Fatalf("%s: got %.6f, want %.6f", label, got, want)
+	}
+}

@@ -87,8 +87,15 @@ const MemStaleAfter = 60 * time.Second
 
 // Domain is a single snapshot of one libvirt domain.
 type Domain struct {
+	// Host labels the libvirt endpoint this domain came from. It is empty for
+	// a single host, so existing single-host behavior is unchanged. When
+	// several hosts are combined, Host disambiguates identical VM names.
+	Host string
 	Name string
-	Info Info
+	// HostCores is the CPU count of the domain's libvirt host. Zero means it
+	// could not be read; callers fall back to the local core count.
+	HostCores int
+	Info      Info
 
 	State State
 
@@ -118,6 +125,40 @@ type Domain struct {
 
 	Disks []Disk
 	Nets  []Net
+}
+
+// keySep separates the host label from the domain name in a Domain key. It
+// cannot occur in a libvirt endpoint label or a domain name.
+const keySep = "\x00"
+
+// Key is the stable identity of a domain within a combined snapshot. VM names
+// are only unique per libvirt endpoint, so multi-host snapshots use
+// host + separator + name. With a single host (Host == "") Key is just Name.
+func (d *Domain) Key() string {
+	if d.Host == "" {
+		return d.Name
+	}
+	return d.Host + keySep + d.Name
+}
+
+// DisplayName is the human-readable label for lists and titles. Multi-host
+// domains are prefixed with their host, which also keeps repeated VM names
+// distinguishable on screen.
+func (d *Domain) DisplayName() string {
+	if d.Host == "" {
+		return d.Name
+	}
+	return d.Host + "/" + d.Name
+}
+
+// SplitKey reverses Key for callers that need the host and name separately.
+func SplitKey(key string) (host, name string) {
+	for i := 0; i+len(keySep) <= len(key); i++ {
+		if key[i:i+len(keySep)] == keySep {
+			return key[:i], key[i+len(keySep):]
+		}
+	}
+	return "", key
 }
 
 // MemStatus classifies the guest memory statistics as of now.
@@ -229,6 +270,29 @@ type Info struct {
 	Err string
 }
 
+// HostStats is one libvirt endpoint's node-wide resource snapshot. It covers
+// the hypervisor machine itself, not just its guests.
+type HostStats struct {
+	Label    string
+	URI      string
+	Hostname string
+	Cores    int
+
+	// CPUValid is false until two CPU counter samples have been seen. A
+	// genuine 0% reading is still valid, so callers must not use the percent
+	// value alone to decide whether data exists.
+	CPUPercent float64
+	CPUValid   bool
+
+	MemTotalKiB uint64
+	MemUsedKiB  uint64
+	MemValid    bool
+
+	// Err lists statistics that could not be read from this endpoint. Domains
+	// from the same host may still be available.
+	Err string
+}
+
 // IfaceInfo is a guest or host-side interface address record.
 type IfaceInfo struct {
 	Name  string
@@ -240,19 +304,21 @@ type IfaceInfo struct {
 type Snapshot struct {
 	At      time.Time
 	Domains []*Domain
-	ByName  map[string]*Domain
-	// Warnings lists per-domain problems that did not fail the whole
-	// collection (for example a domain whose name could not be read and was
-	// therefore skipped).
+	// Hosts holds node-wide stats for each endpoint that reported them.
+	Hosts []HostStats
+	// ByKey indexes domains by Domain.Key(), not by bare name.
+	ByKey map[string]*Domain
+	// Warnings lists per-domain or per-host problems that did not fail the
+	// whole collection (for example an unreachable remote host).
 	Warnings []string
 }
 
 func NewSnapshot(at time.Time, domains []*Domain, warnings []string) *Snapshot {
-	byName := make(map[string]*Domain, len(domains))
+	byKey := make(map[string]*Domain, len(domains))
 	for _, d := range domains {
-		byName[d.Name] = d
+		byKey[d.Key()] = d
 	}
-	return &Snapshot{At: at, Domains: domains, ByName: byName, Warnings: warnings}
+	return &Snapshot{At: at, Domains: domains, ByKey: byKey, Warnings: warnings}
 }
 
 func (s *Snapshot) Counts() (active, total int) {

@@ -21,7 +21,7 @@ type countingSource struct {
 }
 
 func (c *countingSource) Collect() (*hypervisor.Snapshot, error) { return nil, nil }
-func (c *countingSource) Interfaces(string) ([]hypervisor.IfaceInfo, error) {
+func (c *countingSource) Interfaces(string, string) ([]hypervisor.IfaceInfo, error) {
 	c.calls++
 	return c.out, c.err
 }
@@ -289,8 +289,8 @@ func TestMemoryRenderingStates(t *testing.T) {
 	t0 := time.Unix(1700000050, 0)
 	snap := testSnapshot(t0, true)
 	// vm-cpu: fresh (default). vm-mem: stale. vm-pause: no guest statistics.
-	snap.ByName["vm-mem"].MemLastUpdate = t0.Add(-2 * time.Hour)
-	snap.ByName["vm-pause"].MemUsableSet = false
+	snap.ByKey["vm-mem"].MemLastUpdate = t0.Add(-2 * time.Hour)
+	snap.ByKey["vm-pause"].MemUsableSet = false
 	m.handlePoll(pollMsg{snap: snap})
 
 	view := strings.Join(visibleLines(m.View()), "\n")
@@ -342,8 +342,8 @@ func TestMetadataErrorsShownAsUnknownNotOff(t *testing.T) {
 	m := newTestModel(t)
 	m.selected = "vm-cpu"
 	m.showDetail = true
-	m.snap.ByName["vm-cpu"].Info.Err = "autostart: boom"
-	m.snap.ByName["vm-cpu"].Info.Autostart = false
+	m.snap.ByKey["vm-cpu"].Info.Err = "autostart: boom"
+	m.snap.ByKey["vm-cpu"].Info.Autostart = false
 	detail := strings.Join(visibleLines(m.View()), "\n")
 	if !strings.Contains(detail, "autostart ?") || !strings.Contains(detail, "persistent ?") {
 		t.Errorf("failed metadata lookup must render as ?:\n%s", detail)
@@ -357,7 +357,7 @@ func TestInactiveDomainShowsDashForID(t *testing.T) {
 	m := newTestModel(t)
 	m.filter = FilterAll
 	m.selected = "vm-off"
-	m.snap.ByName["vm-off"].Info.ID = -1
+	m.snap.ByKey["vm-off"].Info.ID = -1
 	m.showDetail = true
 	detail := strings.Join(visibleLines(m.View()), "\n")
 	if strings.Contains(detail, "id -1") {

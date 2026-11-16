@@ -134,7 +134,7 @@ func TestCombineAggregatesOnlyFreshMemory(t *testing.T) {
 	domains := []*hypervisor.Domain{a, b, stale, nostats, off}
 	rates := map[string]Rates{}
 	for _, d := range domains {
-		rates[d.Name] = Compute(nil, CountersOf(d, at), d, 8)
+		rates[d.Key()] = Compute(nil, CountersOf(d, at), d, 8)
 	}
 	rates["a"] = withTraffic(rates["a"], 1000, 2000, 3000, 4000)
 	rates["b"] = withTraffic(rates["b"], 500, 0, 0, 0)
@@ -211,4 +211,28 @@ func TestCPUCombineExcludesPaused(t *testing.T) {
 	}
 	approx(t, util, 50, "cpu util")
 	approx(t, host, 37.5, "host share")
+}
+
+func TestHostShareUsesEachDomainsOwnHostCores(t *testing.T) {
+	t0 := time.Unix(1700000000, 0)
+	t1 := t0.Add(time.Second)
+	d := &hypervisor.Domain{
+		Host: "remote", Name: "vm", State: hypervisor.StateRunning, VCPUs: 1,
+		HostCores: 4, CPUTimeNS: 1_000_000_000,
+	}
+	prev := CountersOf(d, t0)
+	d.CPUTimeNS += 2_000_000_000 // 2 CPU-seconds in one wall second
+	r := Compute(&prev, CountersOf(d, t1), d, 64)
+	approx(t, r.HostPct, 50, "remote host pct (2s / 4 cores)")
+
+	domains := []*hypervisor.Domain{
+		{Host: "local", Name: "a", State: hypervisor.StateRunning, VCPUs: 1, HostCores: 4},
+		{Host: "remote", Name: "b", State: hypervisor.StateRunning, VCPUs: 1, HostCores: 8},
+	}
+	rates := map[string]Rates{
+		domains[0].Key(): {CPUDeltaNS: 2_000_000_000},
+		domains[1].Key(): {CPUDeltaNS: 4_000_000_000},
+	}
+	_, _, host := CPUCombine(domains, rates, 1, 64)
+	approx(t, host, 100, "combined share across differently sized hosts")
 }

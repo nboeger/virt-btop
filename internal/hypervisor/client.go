@@ -23,6 +23,11 @@ const statsTypes = libvirt.DOMAIN_STATS_STATE |
 // can get. The cache is also refreshed whenever a domain's state changes.
 const infoTTL = 30 * time.Second
 
+// nodeInfoTTL is how long the host CPU count is cached. It changes only on
+// hardware/VM reconfiguration, so it is safe to keep for longer than domain
+// metadata.
+const nodeInfoTTL = 5 * time.Minute
+
 var (
 	errClosed       = errors.New("libvirt client is closed")
 	errDisconnected = errors.New("not connected to libvirt")
@@ -43,6 +48,7 @@ type cachedInfo struct {
 // uses the raw connection pointer without taking its own reference).
 type Client struct {
 	uri       string
+	label     string
 	readWrite bool
 
 	connMu sync.RWMutex
@@ -51,6 +57,16 @@ type Client struct {
 
 	infoMu sync.Mutex
 	infos  map[string]cachedInfo
+
+	nodeMu       sync.Mutex
+	nodeCores    int
+	nodeHostname string
+	nodeInfoAt   time.Time
+
+	nodeCPUMu       sync.Mutex
+	nodeCPUPrev     uint64
+	nodeCPUPrevIdle uint64
+	nodeCPUHavePrev bool
 
 	// periodTried maps a domain name to the domain ID for which we already
 	// tried to enable the balloon stats period, so a failure is not retried
@@ -71,22 +87,34 @@ func openConn(uri string, readWrite bool) (*libvirt.Connect, error) {
 	return libvirt.NewConnectReadOnly(uri)
 }
 
-// Connect creates a read-only connection by default. Read-only monitoring is
-// allowed by libvirt's local polkit policy without adding the user to the
-// libvirt group. Use readWrite for guest-agent interface addresses.
-func Connect(uri string, readWrite bool) (*Client, error) {
+// ResolveURI applies the same defaulting rules as Connect: an empty URI means
+// $LIBVIRT_DEFAULT_URI, then qemu:///system.
+func ResolveURI(uri string) string {
 	if uri == "" {
 		uri = os.Getenv("LIBVIRT_DEFAULT_URI")
 	}
 	if uri == "" {
 		uri = "qemu:///system"
 	}
+	return uri
+}
+
+// Connect creates a read-only connection by default. Read-only monitoring is
+// allowed by libvirt's local polkit policy without adding the user to the
+// libvirt group. Use readWrite for guest-agent interface addresses.
+func Connect(uri string, readWrite bool) (*Client, error) {
+	return connectLabeled(uri, "", readWrite)
+}
+
+func connectLabeled(uri, label string, readWrite bool) (*Client, error) {
+	uri = ResolveURI(uri)
 	conn, err := openConn(uri, readWrite)
 	if err != nil {
 		return nil, fmt.Errorf("connect %s: %w", uri, err)
 	}
 	return &Client{
 		uri:       uri,
+		label:     label,
 		readWrite: readWrite,
 		conn:      conn,
 		infos:     make(map[string]cachedInfo),
@@ -94,6 +122,7 @@ func Connect(uri string, readWrite bool) (*Client, error) {
 }
 
 func (c *Client) URI() string     { return c.uri }
+func (c *Client) Label() string   { return c.label }
 func (c *Client) ReadWrite() bool { return c.readWrite }
 
 // Close waits for in-flight calls to finish. If libvirtd is hung that can take
@@ -188,6 +217,8 @@ func (c *Client) collect() (*Snapshot, error) {
 	}()
 
 	now := time.Now()
+	host := c.hostStats(c.conn, now)
+	cores := host.Cores
 	domains := make([]*Domain, 0, len(stats))
 	var warnings []string
 	seen := make(map[string]bool, len(stats))
@@ -201,6 +232,8 @@ func (c *Client) collect() (*Snapshot, error) {
 			continue
 		}
 		d := domainFromStats(name, &stats[i])
+		d.Host = c.label
+		d.HostCores = cores
 		d.Info = c.infoFor(name, stats[i].Domain, d.State, now)
 		if d.VCPUs == 0 {
 			d.VCPUs = d.Info.ConfiguredVCPUs
@@ -216,7 +249,149 @@ func (c *Client) collect() (*Snapshot, error) {
 	c.pruneDomainCaches(seen)
 
 	sort.Slice(domains, func(i, j int) bool { return domains[i].Name < domains[j].Name })
-	return NewSnapshot(now, domains, warnings), nil
+	snap := NewSnapshot(now, domains, warnings)
+	snap.Hosts = []HostStats{host}
+	return snap, nil
+}
+
+// cachedNodeInfo returns the host's CPU count and hostname, consulting libvirt
+// at most once per nodeInfoTTL. The caller holds connMu's read lock, so conn is
+// valid.
+func (c *Client) cachedNodeInfo(conn *libvirt.Connect, now time.Time) (cores int, hostname string) {
+	c.nodeMu.Lock()
+	defer c.nodeMu.Unlock()
+	if !c.nodeInfoAt.IsZero() && now.Sub(c.nodeInfoAt) < nodeInfoTTL {
+		return c.nodeCores, c.nodeHostname
+	}
+	if conn == nil {
+		return c.nodeCores, c.nodeHostname
+	}
+	if info, err := conn.GetNodeInfo(); err == nil && info.Cpus > 0 {
+		c.nodeCores = int(info.Cpus)
+	}
+	if name, err := conn.GetHostname(); err == nil {
+		c.nodeHostname = name
+	}
+	c.nodeInfoAt = now
+	return c.nodeCores, c.nodeHostname
+}
+
+// hostStats samples node-wide CPU and memory for this endpoint. Individual
+// failures are recorded in HostStats.Err rather than failing domain collection.
+func (c *Client) hostStats(conn *libvirt.Connect, now time.Time) HostStats {
+	h := HostStats{Label: c.label, URI: c.uri}
+	h.Cores, h.Hostname = c.cachedNodeInfo(conn, now)
+	if conn == nil {
+		h.Err = errDisconnected.Error()
+		return h
+	}
+	var errs []error
+
+	cpu, err := conn.GetCPUStats(int(libvirt.NODE_CPU_STATS_ALL_CPUS), 0)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("cpu: %w", err))
+	} else if pct, ok := c.nodeCPUPercent(cpu); ok {
+		h.CPUPercent = pct
+		h.CPUValid = true
+	}
+
+	mem, err := conn.GetMemoryStats(libvirt.NODE_MEMORY_STATS_ALL_CELLS, 0)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("memory: %w", err))
+	} else if total, used, ok := nodeMemoryUsed(mem); ok {
+		h.MemTotalKiB = total
+		h.MemUsedKiB = used
+		h.MemValid = true
+	}
+
+	if len(errs) > 0 {
+		h.Err = errors.Join(errs...).Error()
+	}
+	return h
+}
+
+// nodeCPUPercent turns two cumulative node CPU samples into a busy percentage.
+func (c *Client) nodeCPUPercent(st *libvirt.NodeCPUStats) (float64, bool) {
+	total, idle, ok := nodeCPUTimes(st)
+	if !ok {
+		return 0, false
+	}
+
+	c.nodeCPUMu.Lock()
+	defer c.nodeCPUMu.Unlock()
+	if !c.nodeCPUHavePrev || total < c.nodeCPUPrev || idle < c.nodeCPUPrevIdle {
+		c.nodeCPUPrev, c.nodeCPUPrevIdle, c.nodeCPUHavePrev = total, idle, true
+		return 0, false
+	}
+	dTotal := total - c.nodeCPUPrev
+	dIdle := idle - c.nodeCPUPrevIdle
+	c.nodeCPUPrev, c.nodeCPUPrevIdle = total, idle
+	if dTotal == 0 {
+		return 0, false
+	}
+	busy := dTotal - minUint64(dIdle, dTotal)
+	return float64(busy) / float64(dTotal) * 100, true
+}
+
+// nodeCPUTimes sums the cumulative CPU counters. Guest time is already part of
+// user time, so including it would count guest load twice.
+func nodeCPUTimes(st *libvirt.NodeCPUStats) (total, idle uint64, ok bool) {
+	add := func(set bool, v uint64) {
+		if set {
+			total += v
+			ok = true
+		}
+	}
+	add(st.KernelSet, st.Kernel)
+	add(st.UserSet, st.User)
+	add(st.IdleSet, st.Idle)
+	add(st.IowaitSet, st.Iowait)
+	add(st.IntrSet, st.Intr)
+	if st.IdleSet {
+		idle += st.Idle
+	}
+	if st.IowaitSet {
+		idle += st.Iowait
+	}
+	if !ok || (!st.KernelSet && !st.UserSet && !st.IntrSet) || (!st.IdleSet && !st.IowaitSet) || total == 0 {
+		return 0, 0, false
+	}
+	return total, idle, true
+}
+
+func nodeMemoryUsed(st *libvirt.NodeMemoryStats) (total, used uint64, ok bool) {
+	if !st.TotalSet || st.Total == 0 {
+		return 0, 0, false
+	}
+	total = st.Total
+	var avail uint64
+	switch {
+	case st.AvailableSet:
+		avail = st.Available
+	case st.FreeSet || st.BuffersSet || st.CachedSet:
+		if st.FreeSet {
+			avail += st.Free
+		}
+		if st.BuffersSet {
+			avail += st.Buffers
+		}
+		if st.CachedSet {
+			avail += st.Cached
+		}
+	default:
+		return 0, 0, false
+	}
+	if avail > total {
+		avail = total
+	}
+	return total, total - avail, true
+}
+
+func minUint64(a, b uint64) uint64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // pruneDomainCaches drops per-domain entries for domains that are no longer
@@ -394,8 +569,9 @@ func infoFromDomain(dom *libvirt.Domain, state State) Info {
 // Interfaces fetches interface addresses for the detail overlay. In read-only
 // mode only ARP and DHCP-lease sources are available; guest-agent lookup needs
 // a read-write connection. The domain must be running; libvirt rejects the
-// call otherwise.
-func (c *Client) Interfaces(name string) ([]IfaceInfo, error) {
+// call otherwise. The host argument is ignored here; Cluster uses it to route
+// the lookup to the right connection.
+func (c *Client) Interfaces(_, name string) ([]IfaceInfo, error) {
 	c.connMu.RLock()
 	defer c.connMu.RUnlock()
 	if c.closed {

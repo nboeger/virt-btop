@@ -65,7 +65,7 @@ func (m *Model) View() string {
 	m.renderNet(s, l)
 	m.renderList(s, l)
 	m.renderFooter(s, l)
-	if m.showHelp || m.showDetail {
+	if m.showHelp || m.showDetail || m.showHosts {
 		s.Fill(0, l.HeaderH, l.W, l.H-l.HeaderH-1, Style{})
 	}
 	if m.showHelp {
@@ -73,6 +73,9 @@ func (m *Model) View() string {
 	}
 	if m.showDetail {
 		m.renderDetail(s, l)
+	}
+	if m.showHosts {
+		m.renderHosts(s, l)
 	}
 	return s.Render()
 }
@@ -142,28 +145,76 @@ func (m *Model) renderHeader(s *Screen, l Layout) {
 	if hostname == "" {
 		hostname = "localhost"
 	}
-	putSpans(s, x, y, maxW, []span{
-		{"host ", Style{FG: m.pal.GraphText}},
-		{hostname, Style{FG: m.pal.MainFG, Bold: true}},
-		{" · ", Style{FG: m.pal.DivLine}},
-		{fmt.Sprintf("%d cores", m.host.Cores), Style{FG: m.pal.MainFG}},
-		{" · load ", Style{FG: m.pal.GraphText}},
-		{fmt.Sprintf("%.2f %.2f %.2f", m.host.Load1, m.host.Load5, m.host.Load15), Style{FG: loadColor}},
-		{" · cpu ", Style{FG: m.pal.GraphText}},
-		{pct1(hostCPU), Style{FG: m.pal.CPU.At(clamp(hostCPU/100, 0, 1))}},
-		{" · mem ", Style{FG: m.pal.GraphText}},
-		{fmt.Sprintf("%s/%s", humanKiB(m.host.MemUsedKiB), humanKiB(m.host.MemTotalKiB)), Style{FG: m.pal.Mem.At(clamp(hostMemPct/100, 0, 1))}},
-		{" · up ", Style{FG: m.pal.GraphText}},
-		{duration(m.host.Uptime), Style{FG: m.pal.MainFG}},
-		{hostErrNote(m.host), Style{FG: m.pal.Error}},
-	}, nil)
+
+	hs := m.hostTotals()
+	var top []span
+	if m.hostCount > 1 && hs.Reporting > 0 {
+		reporting := fmt.Sprintf("%d/%d", hs.Reporting, hs.Configured)
+		if hs.Reporting == hs.Configured && hs.Errors == 0 {
+			reporting = fmt.Sprintf("%d", hs.Configured)
+		}
+		top = []span{
+			{"hosts ", Style{FG: m.pal.GraphText}},
+			{reporting, Style{FG: m.pal.MainFG, Bold: true}},
+		}
+		if hs.Cores > 0 {
+			top = append(top,
+				span{" · ", Style{FG: m.pal.DivLine}},
+				span{hostCores(hs.Cores), Style{FG: m.pal.MainFG}})
+		}
+		top = append(top, span{" · cpu ", Style{FG: m.pal.GraphText}})
+		if hs.CPUValid {
+			top = append(top, span{pct1(hs.CPUPercent), Style{FG: m.pal.CPU.At(clamp(hs.CPUPercent/100, 0, 1))}})
+		} else {
+			top = append(top, span{"—", Style{FG: m.pal.GraphText}})
+		}
+		top = append(top, span{" · mem ", Style{FG: m.pal.GraphText}})
+		if hs.MemValid {
+			top = append(top, span{hostMem(hs.MemValid, hs.MemUsedKiB, hs.MemTotalKiB), Style{FG: m.pal.Mem.At(clamp(hs.memPct()/100, 0, 1))}})
+		} else {
+			top = append(top, span{"—", Style{FG: m.pal.GraphText}})
+		}
+		if m.localHost {
+			top = append(top,
+				span{" · local load ", Style{FG: m.pal.GraphText}},
+				span{fmt.Sprintf("%.2f %.2f %.2f", m.host.Load1, m.host.Load5, m.host.Load15), Style{FG: loadColor}},
+				span{" · up ", Style{FG: m.pal.GraphText}},
+				span{duration(m.host.Uptime), Style{FG: m.pal.MainFG}})
+		}
+		if hs.Errors > 0 {
+			top = append(top, span{" · " + hostStatErrLabel(hs.Errors), Style{FG: m.pal.Error}})
+		} else {
+			top = append(top, span{hostErrNote(m.host), Style{FG: m.pal.Error}})
+		}
+	} else {
+		hostLabel := "host "
+		if m.hostCount > 1 {
+			hostLabel = "local host "
+		}
+		top = []span{
+			{hostLabel, Style{FG: m.pal.GraphText}},
+			{hostname, Style{FG: m.pal.MainFG, Bold: true}},
+			{" · ", Style{FG: m.pal.DivLine}},
+			{fmt.Sprintf("%d cores", m.host.Cores), Style{FG: m.pal.MainFG}},
+			{" · load ", Style{FG: m.pal.GraphText}},
+			{fmt.Sprintf("%.2f %.2f %.2f", m.host.Load1, m.host.Load5, m.host.Load15), Style{FG: loadColor}},
+			{" · cpu ", Style{FG: m.pal.GraphText}},
+			{pct1(hostCPU), Style{FG: m.pal.CPU.At(clamp(hostCPU/100, 0, 1))}},
+			{" · mem ", Style{FG: m.pal.GraphText}},
+			{fmt.Sprintf("%s/%s", humanKiB(m.host.MemUsedKiB), humanKiB(m.host.MemTotalKiB)), Style{FG: m.pal.Mem.At(clamp(hostMemPct/100, 0, 1))}},
+			{" · up ", Style{FG: m.pal.GraphText}},
+			{duration(m.host.Uptime), Style{FG: m.pal.MainFG}},
+			{hostErrNote(m.host), Style{FG: m.pal.Error}},
+		}
+	}
+	putSpans(s, x, y, maxW, top, nil)
 
 	active, total := 0, 0
 	if m.snap != nil {
 		active, total = m.snap.Counts()
 	}
 	c := m.combined
-	putSpans(s, x, y+1, maxW, []span{
+	vmSpans := []span{
 		{"VMs ", Style{FG: m.pal.GraphText}},
 		{fmt.Sprintf("%d/%d", active, total), Style{FG: m.pal.MainFG, Bold: true}},
 		{" · vCPU ", Style{FG: m.pal.GraphText}},
@@ -178,7 +229,11 @@ func (m *Model) renderHeader(s *Screen, l Layout) {
 		{"↓" + humanRateShort(c.NetRXBps) + " ↑" + humanRateShort(c.NetTXBps), Style{FG: m.pal.Download.At(0.55)}},
 		{" · disk ", Style{FG: m.pal.GraphText}},
 		{"R" + humanRateShort(c.DiskRDBps) + " W" + humanRateShort(c.DiskWRBps), Style{FG: m.pal.Upload.At(0.55)}},
-	}, nil)
+	}
+	if m.hostCount > 1 && hs.Reporting == 0 {
+		vmSpans = append(vmSpans, span{" · ", Style{FG: m.pal.DivLine}}, span{fmt.Sprintf("%d hosts", m.hostCount), Style{FG: m.pal.MainFG}})
+	}
+	putSpans(s, x, y+1, maxW, vmSpans, nil)
 }
 
 func (m *Model) runningByCPU() []*hypervisor.Domain {
@@ -192,9 +247,9 @@ func (m *Model) runningByCPU() []*hypervisor.Domain {
 		}
 	}
 	sort.SliceStable(active, func(i, j int) bool {
-		ra, rb := m.rates[active[i].Name], m.rates[active[j].Name]
+		ra, rb := m.rates[active[i].Key()], m.rates[active[j].Key()]
 		if ra.CPUPct == rb.CPUPct {
-			return active[i].Name < active[j].Name
+			return active[i].Key() < active[j].Key()
 		}
 		return ra.CPUPct > rb.CPUPct
 	})
@@ -243,7 +298,7 @@ func (m *Model) renderCPU(s *Screen, l Layout) {
 		row, col := i%rows, i/rows
 		x := l.CPUInnerX + col*(cellW+cellGap)
 		y := l.CPUInnerY + row
-		selected := d.Name == m.selected
+		selected := d.Key() == m.selected
 		var bg termenv.Color
 		if selected {
 			bg = m.pal.SelectedBG
@@ -257,9 +312,9 @@ func (m *Model) renderCPU(s *Screen, l Layout) {
 		if selected {
 			nameStyle = Style{FG: m.pal.SelectedFG, BG: bg, Bold: true}
 		}
-		s.Put(x, y, nameW, truncate(d.Name, nameW), nameStyle)
+		s.Put(x, y, nameW, truncate(d.DisplayName(), nameW), nameStyle)
 
-		r := m.rates[d.Name]
+		r := m.rates[d.Key()]
 		frac := clamp(r.CPUPct/100, 0, 1)
 		drawBar(s, x+nameW+1, y, cpuBarW, frac, m.pal.Proc, bg, m.pal)
 		pctStyle := Style{FG: m.pal.Proc.At(frac)}
@@ -552,7 +607,7 @@ func (m *Model) renderList(s *Screen, l Layout) {
 		for i := start; i < end; i++ {
 			d := vis[i]
 			y := g.RowsY + (i - start)
-			selected := d.Name == m.selected
+			selected := d.Key() == m.selected
 			var bg termenv.Color
 			if selected {
 				bg = m.pal.SelectedBG
@@ -584,7 +639,7 @@ func (m *Model) renderList(s *Screen, l Layout) {
 }
 
 func (m *Model) drawListRow(s *Screen, g listGeometry, lc listColumns, d *hypervisor.Domain, y int, selected bool, bg termenv.Color) {
-	r := m.rates[d.Name]
+	r := m.rates[d.Key()]
 	dim := !d.State.Active()
 
 	// name + selection marker
@@ -603,7 +658,7 @@ func (m *Model) drawListRow(s *Screen, g listGeometry, lc listColumns, d *hyperv
 	} else if dim {
 		nameStyle.FG = m.pal.InactiveFG
 	}
-	s.Put(g.X+2, y, lc.nameW-2, truncate(d.Name, lc.nameW-2), nameStyle)
+	s.Put(g.X+2, y, lc.nameW-2, truncate(d.DisplayName(), lc.nameW-2), nameStyle)
 
 	// state
 	if lc.stateW > 0 {
@@ -805,7 +860,7 @@ func (m *Model) renderHelp(s *Screen, l Layout) {
 		"  1..6            cpu mem name disk net state",
 		"  r               reverse sort",
 		"  f               all/running/paused/stopped",
-		"  /               search by name",
+		"  /               search name or host",
 		"",
 		"CPU BOX",
 		"  running VMs, top N by CPU; braille graphs",
@@ -815,6 +870,7 @@ func (m *Model) renderHelp(s *Screen, l Layout) {
 		"  p / space       pause sampling",
 		"  + / -           poll interval",
 		"  R               refresh metadata",
+		"  H               host-wide stats",
 		"  Enter           VM detail",
 		"  ?               this help",
 		"  q / Ctrl-C      quit",
@@ -829,6 +885,7 @@ func (m *Model) renderHelp(s *Screen, l Layout) {
 		"CONNECTION",
 		"  RO          read-only, no group/sudo required",
 		"  RW          --read-write, libvirt group needed",
+		"  hosts       --add combines node CPU/memory",
 	}
 
 	contentH := height - 2

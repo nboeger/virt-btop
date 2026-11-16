@@ -15,6 +15,10 @@ parsing — and lays the data out like btop:
   network, red VM list), and filled Unicode braille area graphs (U+2800–U+28FF);
   the memory and network graph colors are 30% brighter than btop's defaults.
 - running VMs by default; press `f` to include paused, stopped, or all VMs.
+- one local libvirt host by default, or **several hosts combined** into one view
+  with repeatable `--add`; VM names are qualified by host so identical names
+  do not collide. Node-wide CPU and memory are combined across hosts, and `H`
+  shows the per-host breakdown.
 
 Read-only by default: on Debian/Ubuntu this needs **no sudo and no libvirt
 group**. An opt-in read-write connection (`--read-write`) enables guest-agent IP addresses and
@@ -99,7 +103,8 @@ make build-linked
 | `qemu:///session` | Sees only the current user's session VMs. No group needed. |
 
 `LIBVIRT_DEFAULT_URI` is respected. If a read-write connection is denied, the
-error message includes the group hint.
+error message includes the group hint. With `--add`, the same permission rules
+apply to every remote endpoint (typically `qemu+ssh://user@host/system`).
 
 ## Usage
 
@@ -107,6 +112,7 @@ error message includes the group hint.
 virt-btop [flags]
 
   -c, --connect URI      libvirt URI (default: $LIBVIRT_DEFAULT_URI or qemu:///system)
+      --add URI          add another libvirt host to the combined view (repeatable)
   -i, --interval DUR    poll interval, e.g. 1s or 500ms (250ms–10s, default 1s;
                          values outside the range are rejected, not clamped)
       --read-write       read-write connection (guest-agent IPs; libvirt group required)
@@ -121,6 +127,8 @@ Useful examples:
 ```sh
 virt-btop                              # read-only, qemu:///system
 virt-btop -c qemu:///session           # your session VMs only
+virt-btop --add qemu+ssh://server1/system --add qemu+ssh://server2/system
+                                       # local host plus two remotes
 virt-btop --read-write                 # guest-agent interface addresses
 virt-btop --filter all                 # include paused and stopped VMs
 virt-btop --once -i 500ms              # scriptable one-shot table
@@ -139,13 +147,44 @@ virt-btop --sort mem --filter running
 | `1`…`6` | sort cpu / mem / name / disk / net / state |
 | `r` | reverse sort |
 | `f` | filter all / running / paused / stopped |
-| `/` | search by name (`Enter` apply, `Esc` clear) |
+| `/` | search by name or host (`Enter` apply, `Esc` clear) |
 | `p` or `Space` | pause sampling |
 | `+` / `-` | increase / decrease poll interval |
 | `R` | refresh cached VM metadata and interface addresses |
+| `H` | open host-wide CPU/memory overlay |
 | `Enter` | open VM detail overlay |
 | `?` | help |
 | `q` / `Ctrl-C` | quit |
+
+## Combining hosts
+
+`--add` is repeatable. The primary connection is the local default (or the URI
+given with `-c`), and every `--add` URI is merged into the same CPU, memory,
+network, and VM-list boxes:
+
+```sh
+# local default plus two remote libvirt endpoints
+virt-btop --add qemu+ssh://alice@alpha/system --add qemu+tcp://beta/system
+
+# three explicit endpoints; the local host is not included unless you add it
+virt-btop -c qemu+ssh://alpha/system \
+          --add qemu+ssh://beta/system \
+          --add qemu:///system
+```
+
+Remote endpoints are collected concurrently. If one becomes unreachable, the
+other hosts keep updating and the footer shows a warning. A host that is
+already unreachable at startup is skipped with a warning; restart virt-btop to
+retry it. Host labels are derived from the URI (`local`, `alpha`, `beta`); VM
+names in the list, CPU box, and detail title become `host/name`.
+
+The top bar combines node-wide CPU (weighted by each host's core count) and
+memory across every endpoint. Load average and uptime are not exposed by
+libvirt, so those two items come from `/proc` and are shown only when the local
+endpoint is part of the run, labelled `local load` and `up`. Press `H` for a
+per-host overlay with cores, CPU, memory, and hostname; used memory is `total -
+available`, falling back to `total - free - buffers - cached`. Use `--once` for
+a scriptable table with a `HOST` column.
 
 The detail overlay shows per-vCPU utilization, a per-VM CPU graph, memory
 breakdown, disk capacities, host-side interfaces, and IP addresses when
@@ -160,10 +199,13 @@ resize message.
   running/blocked VMs: total CPU-time delta / total allocated vCPUs. Paused and
   stopped VMs are excluded. The memory box still includes paused VMs because
   they hold guest memory, even when they are hidden from the list.
-- **host** (in the CPU box) = the same CPU time as a percentage of all host
-  cores. The header's `cpu` is the whole host's busy time from `/proc/stat`;
-  `guest`/`guest_nice` jiffies are not counted twice (they are already inside
-  `user`/`nice`).
+- **host** (in the CPU box) = the same CPU time as a percentage of the cores on
+  the VM's own host. With `--add`, each host is normalized by its own core count
+  and the percentages are summed. The header's combined `cpu` is weighted by
+  each host's core count; when only one host is shown it comes from
+  `/proc/stat`, where `guest`/`guest_nice` jiffies are not counted twice
+  (they are already inside `user`/`nice`). Load average and uptime stay
+  local-only because libvirt does not expose them.
 - **mem** = guest used = configured memory − `balloon.usable` (the guest kernel's
   MemAvailable), falling back to `balloon.unused`. This is **not**
   `current − available`: libvirt's `available` is the total memory the guest
@@ -258,7 +300,8 @@ The build uses `-tags libvirt_dlopen` so tests and builds work without
 `libvirt-dev`. The tests cover rate math, the memory fresh/stale/unknown model,
 `/proc` parsing, libvirt stat conversion, error classification, formatting,
 braille drawing, exact terminal width/height (including hostile VM names),
-sorting/filtering/search, mouse selection, overlay geometry, and CLI validation.
+sorting/filtering/search, mouse selection, overlay geometry, host-combination
+keying and partial-failure handling, and CLI validation.
 
 `TestReconnectAfterConnectionLoss` runs the real client against a small proxy in
 front of libvirt's read-only socket, kills the proxy, brings it back, and checks
@@ -273,6 +316,9 @@ go run honnef.co/go/tools/cmd/staticcheck@latest -tags libvirt_dlopen ./...
 ## Limitations
 
 - Monitoring only: no start/stop/reboot actions.
+- Remote load average and uptime are not available through libvirt. The header
+  shows local load/uptime when the local endpoint is included; CPU and memory
+  are combined across all hosts.
 - Read-only mode cannot query the guest agent, so interface names/IPs may be
   incomplete or stale (ARP/lease best effort).
 - Some libvirt drivers do not report every stat; missing guest memory is shown

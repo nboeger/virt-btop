@@ -170,7 +170,7 @@ func TestSnapshotCounts(t *testing.T) {
 	if active, total := snap.Counts(); active != 2 || total != 3 {
 		t.Fatalf("counts = %d/%d, want 2/3", active, total)
 	}
-	if snap.ByName["b"] == nil {
-		t.Fatal("ByName missing b")
+	if snap.ByKey["b"] == nil {
+		t.Fatal("ByKey missing b")
 	}
 }
