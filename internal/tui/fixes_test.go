@@ -255,7 +255,7 @@ func TestHostileVMNamesKeepGridExactAndEscapeFree(t *testing.T) {
 	snap.Domains[1].Name = "evil\x1b[31mred\x1b]0;title\x07\nnewline"
 	m.handlePoll(pollMsg{snap: hypervisor.NewSnapshot(t0, snap.Domains, nil)})
 
-	for _, size := range [][2]int{{130, 21}, {170, 40}} {
+	for _, size := range [][2]int{{MinWidth, MinHeight}, {80, 24}, {130, 21}, {170, 40}} {
 		m.width, m.height = size[0], size[1]
 		assertViewFits(t, m)
 	}

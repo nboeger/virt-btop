@@ -117,6 +117,13 @@ func TestModelViewFits(t *testing.T) {
 	m.width, m.height = 100, 20
 	assertViewFits(t, m)
 
+	// The smallest supported terminal: every panel still renders content.
+	m.width, m.height = MinWidth, MinHeight
+	assertViewFits(t, m)
+
+	m.width, m.height = 80, 24
+	assertViewFits(t, m)
+
 	m.width, m.height = 130, 21
 	m.showHelp = true
 	assertViewFits(t, m)
@@ -125,6 +132,28 @@ func TestModelViewFits(t *testing.T) {
 	m.showDetail = true
 	m.selected = "vm-cpu"
 	assertViewFits(t, m)
+
+	m.showDetail = false
+	m.showHelp = true
+	m.width, m.height = MinWidth, MinHeight
+	assertViewFits(t, m)
+}
+
+func TestMinSizeThreshold(t *testing.T) {
+	m := newTestModel(t)
+	m.width, m.height = MinWidth, MinHeight
+	if strings.Contains(m.View(), "needs at least") {
+		t.Fatal("layout rejected at its advertised minimum")
+	}
+
+	m.width = MinWidth - 1
+	if !strings.Contains(m.View(), "needs at least") {
+		t.Fatal("narrower-than-minimum terminal did not show the resize message")
+	}
+	m.width, m.height = MinWidth, MinHeight-1
+	if !strings.Contains(m.View(), "needs at least") {
+		t.Fatal("shorter-than-minimum terminal did not show the resize message")
+	}
 }
 
 func TestVisibleDomains(t *testing.T) {
@@ -245,21 +274,43 @@ func TestOverlayRect(t *testing.T) {
 }
 
 func TestListColumnsFit(t *testing.T) {
-	for _, inner := range []int{84, 102, 120} {
-		lc := computeListColumns(inner, true)
-		last := lc.memX + lc.memW
-		if lc.showDisk {
-			last = lc.diskX + lc.diskW
+	for _, inner := range []int{45, 55, 84, 102, 120} {
+		for _, showState := range []bool{false, true} {
+			lc := computeListColumns(inner, showState)
+			last := lc.memX + lc.memW
+			if lc.showDisk {
+				last = lc.diskX + lc.diskW
+			}
+			if lc.showNet {
+				last = lc.netX + lc.netW
+			}
+			if last > inner {
+				t.Fatalf("inner %d state=%v: columns overflow to %d", inner, showState, last)
+			}
+			if lc.nameW < 8 {
+				t.Fatalf("inner %d state=%v: name width %d", inner, showState, lc.nameW)
+			}
 		}
-		if lc.showNet {
-			last = lc.netX + lc.netW
-		}
-		if last > inner {
-			t.Fatalf("inner %d: columns overflow to %d", inner, last)
-		}
-		if lc.nameW < 8 {
-			t.Fatalf("inner %d: name width %d", inner, lc.nameW)
-		}
+	}
+}
+
+func TestListColumnsNarrowDropsOptionalColumns(t *testing.T) {
+	// An 80-column terminal gives the list 45 content cells. It must keep
+	// name, cpu, and memory, dropping disk/net/vCPU as needed.
+	lc := computeListColumns(45, true)
+	if lc.showDisk || lc.showNet || lc.showVCPU {
+		t.Fatalf("optional columns kept at 45 cells: %+v", lc)
+	}
+	if lc.nameW < 8 || lc.cpuW < 9 || lc.memW < 9 {
+		t.Fatalf("essential columns squeezed: %+v", lc)
+	}
+
+	without := computeListColumns(45, false)
+	if without.showDisk || without.showNet {
+		t.Fatalf("disk/net kept at 45 cells: %+v", without)
+	}
+	if without.nameW < 8 || without.cpuW < 9 || without.memW < 9 {
+		t.Fatalf("essential columns squeezed: %+v", without)
 	}
 }
 

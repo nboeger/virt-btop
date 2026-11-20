@@ -282,10 +282,13 @@ func (m *Model) renderCPU(s *Screen, l Layout) {
 	show := len(active)
 	more := 0
 	if show > capacity {
-		more = len(active) - (capacity - 1)
-		show = capacity - 1
-		if show < 0 {
-			show = 0
+		if capacity > 1 {
+			more = len(active) - (capacity - 1)
+			show = capacity - 1
+		} else {
+			// A single-row CPU box has no room for a "+N more" marker.
+			// Showing the busiest VM is more useful than only a count.
+			show = 1
 		}
 	}
 
@@ -470,10 +473,18 @@ func (m *Model) drawMemMeter(s *Screen, x, y, w int, label string, kib, total ui
 	}
 	putSpans(s, x+labelW, y, valW, []span{{val, Style{FG: m.pal.MainFG}}}, nil)
 	barX := x + labelW + valW + 1
-	barW := w - (labelW + valW + 1) - pctW - 1
+	avail := w - (labelW + valW + 1)
+	if avail <= 0 {
+		return
+	}
+	barW := avail - pctW - 1
 	if barW >= 3 {
 		drawBar(s, barX, y, barW, frac, grad, nil, m.pal)
 		putSpans(s, barX+barW+1, y, pctW, []span{{fmt.Sprintf("%3.0f%%", frac*100), Style{FG: m.pal.MainFG}}}, nil)
+	} else if avail >= pctW {
+		// Too narrow for a bar; keep the percentage, which is the part
+		// that matters most when the left column is compressed.
+		putSpans(s, x+w-pctW, y, pctW, []span{{fmt.Sprintf("%3.0f%%", frac*100), Style{FG: m.pal.MainFG}}}, nil)
 	}
 }
 
@@ -585,7 +596,9 @@ func (m *Model) renderList(s *Screen, l Layout) {
 		header(g.X+lc.stateX, lc.stateW, "STATE", SortState)
 	}
 	header(g.X+lc.cpuX, lc.cpuW, "CPU%", SortCPU)
-	s.Put(g.X+lc.vcpuX, g.HeaderY, lc.vcpuW, "vCPU", headerStyle)
+	if lc.showVCPU {
+		s.Put(g.X+lc.vcpuX, g.HeaderY, lc.vcpuW, "vCPU", headerStyle)
+	}
 	header(g.X+lc.memX, lc.memW, "MEM", SortMem)
 	if lc.showDisk {
 		header(g.X+lc.diskX, lc.diskW, "DISK R/W", SortDisk)
@@ -687,19 +700,21 @@ func (m *Model) drawListRow(s *Screen, g listGeometry, lc listColumns, d *hyperv
 	}
 
 	// vCPU
-	vcpu := fmt.Sprintf("%d", d.VCPUs)
-	if d.Info.ConfiguredVCPUs > d.VCPUs && d.Info.ConfiguredVCPUs > 0 {
-		vcpu = fmt.Sprintf("%d/%d", d.VCPUs, d.Info.ConfiguredVCPUs)
+	if lc.showVCPU {
+		vcpu := fmt.Sprintf("%d", d.VCPUs)
+		if d.Info.ConfiguredVCPUs > d.VCPUs && d.Info.ConfiguredVCPUs > 0 {
+			vcpu = fmt.Sprintf("%d/%d", d.VCPUs, d.Info.ConfiguredVCPUs)
+		}
+		if runewidth.StringWidth(vcpu) > lc.vcpuW {
+			vcpu = fmt.Sprintf("%d", d.VCPUs)
+		}
+		vcpuStyle := styleOrDim(m.pal, dim)
+		vcpuStyle.BG = bg
+		if selected {
+			vcpuStyle.FG = m.pal.SelectedFG
+		}
+		s.PutRight(g.X+lc.vcpuX, y, lc.vcpuW, vcpu, vcpuStyle)
 	}
-	if runewidth.StringWidth(vcpu) > lc.vcpuW {
-		vcpu = fmt.Sprintf("%d", d.VCPUs)
-	}
-	vcpuStyle := styleOrDim(m.pal, dim)
-	vcpuStyle.BG = bg
-	if selected {
-		vcpuStyle.FG = m.pal.SelectedFG
-	}
-	s.PutRight(g.X+lc.vcpuX, y, lc.vcpuW, vcpu, vcpuStyle)
 
 	// memory
 	switch {
@@ -726,7 +741,9 @@ func (m *Model) drawListRow(s *Screen, g listGeometry, lc listColumns, d *hyperv
 		}
 		drawBar(s, g.X+lc.memX, y, lc.memBarW, frac, grad, bg, m.pal)
 		s.Put(g.X+lc.memX+lc.memBarW+1, y, 4, fmt.Sprintf("%4s", pct(r.MemPct)), pctStyle)
-		s.Put(g.X+lc.memX+lc.memBarW+6, y, lc.memW-lc.memBarW-6, humanKiBShort(r.MemUsedKiB), usedStyle)
+		if usedW := lc.memW - lc.memBarW - 6; usedW > 0 {
+			s.Put(g.X+lc.memX+lc.memBarW+6, y, usedW, humanKiBShort(r.MemUsedKiB), usedStyle)
+		}
 	}
 
 	// disk I/O

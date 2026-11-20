@@ -19,7 +19,7 @@ import (
 )
 
 // version is overridden at build time with -ldflags "-X main.version=...".
-var version = "1.4.0"
+var version = "1.5.0"
 
 const (
 	minInterval = 250 * time.Millisecond

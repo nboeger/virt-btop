@@ -188,8 +188,9 @@ a scriptable table with a `HOST` column.
 
 The detail overlay shows per-vCPU utilization, a per-VM CPU graph, memory
 breakdown, disk capacities, host-side interfaces, and IP addresses when
-available. The minimum terminal size is **130×21**; smaller terminals show a
-resize message.
+available. The minimum terminal size is **80×18**; smaller terminals show a
+resize message. 80×24 is the comfortable size, since the CPU box then has four
+VM rows instead of one.
 
 ## Metrics
 
@@ -284,6 +285,10 @@ definition.
 - Right: the VM list (running VMs by default; `f` includes paused/stopped/all),
   with sortable CPU / memory / disk / network columns. The `NET` column appears
   when the terminal is wide enough.
+- At 80×18 the left column is compressed and the list drops optional columns
+  (disk, net, then vCPU, then the memory usage figure) so NAME, CPU%, and MEM
+  stay visible. The CPU box has one VM row; at 80×24 it has four. Wider
+  terminals add the vCPU/disk/net columns back.
 - At 130×21 the CPU box has two VM columns, mem/net show compact graphs, and
   the list shows seven VMs without a totals row. Taller terminals add the
   totals row, RSS line, more graph rows, and all VM columns.
